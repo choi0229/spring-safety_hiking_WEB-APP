@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="mapper-mentordetail">
+
+    <insert id="insertMentorContent" parameterType="com.season.semiproject.vo.MentorContent">
+        INSERT INTO MentorContent (title, content_detail, content_hashtags, user_nickname, user_address, total_person,created_at)
+        VALUES (#{title}, #{contentDetail}, #{contentHashtags}, #{userNickname}, #{userAddress}, #{totalPerson},NOW());
+    </insert>
+
+    <select id="getMentorContentList" resultType="com.season.semiproject.vo.MentorContent">
+        SELECT * FROM MentorContent ORDER BY created_at DESC;
+    </select>
+    
+    <select id="getCount" resultType="com.season.semiproject.vo.Count">
+    	select content_id AS contentId, count(*) AS countNum from ApplyMentee group by content_id;
+    </select>
+
+</mapper>

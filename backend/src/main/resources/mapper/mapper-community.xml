@@ -1,0 +1,139 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="mapper-community">
+<!--  Community 불러오기  -->
+<select id="getCommunityList" resultType="com.season.semiproject.vo.Community"> 
+   select 
+      c.community_pk as communityPk, 
+      c.user_id as userId, 
+      c.user_nickname as userNickName,
+      c.course_name as courseName, 
+      c.community_url as communityUrl, 
+      c.community_title as communityTitle, 
+      c.community_body as communityBody, 
+      c.public_state as publicState,
+      c.safe_state as safeState,
+      DATE_FORMAT(community_reg_date, '%Y-%m-%d') as communityRegDate, 
+      latitude, 
+      longitude,
+      (select count(distinct m.comment_pk) from community_comment m where m.community_pk = c.community_pk) as commentCount,
+      (select count(distinct l.likes_id) from community_likes l where l.community_pk = c.community_pk) as likes
+   from community c
+   order by c.community_reg_date DESC;
+</select>
+
+<select id="getSafeList" resultType="com.season.semiproject.vo.Community"> 
+   select 
+      c.community_pk as communityPk, 
+      c.user_id as userId, 
+      c.user_nickname as userNickName,
+      c.course_name as courseName, 
+      c.community_url as communityUrl, 
+      c.community_title as communityTitle, 
+      c.community_body as communityBody, 
+      c.public_state as publicState,
+      c.safe_state as safeState,
+      DATE_FORMAT(community_reg_date, '%Y-%m-%d') as communityRegDate, 
+      latitude, 
+      longitude,
+      (select count(distinct m.comment_pk) from community_comment m where m.community_pk = c.community_pk) as commentCount,
+      (select count(distinct l.likes_id) from community_likes l where l.community_pk = c.community_pk) as likes
+   from community c
+   where safe_state = 1
+   order by c.community_reg_date DESC;
+</select>
+
+<!--   특정 게시글 조회   -->
+<select id="getCommunityById" parameterType="int" resultType="com.season.semiproject.vo.Community">
+	select c.community_pk as communityPk, 
+	u.user_id as userId, 
+	u.user_nickname as userNickName, 
+	c.course_name as courseName,
+	c.community_url as communityUrl, 
+	c.community_title as communityTitle, 
+	c.community_body as communityBody, 
+	DATE_FORMAT(c.community_reg_date, '%Y-%m-%d') as communityRegDate, 
+	c.latitude, 
+	c.longitude 
+	from community c left join user u on c.user_id = u.user_id where c.community_pk = #{communityPk}; 
+</select>
+<!--  최근 게시글 불러오기  -->
+	<select id="getLatestCommunities" resultType="com.season.semiproject.vo.Community"> 
+		SELECT * 
+		FROM community 
+		ORDER BY community_reg_date 
+		DESC LIMIT 10; 
+	</select>
+<!--  게시글 추가  -->
+<insert id="createCommunity" parameterType="com.season.semiproject.vo.Community"> 
+insert into community (user_id, user_nickname, community_url, community_title, community_body, community_reg_date, latitude, longitude, public_state, safe_state, course_name) 
+values (#{userId}, #{userNickName}, #{communityUrl}, #{communityTitle}, #{communityBody}, sysdate(), #{latitude}, #{longitude}, #{publicState}, #{safeState}, #{courseName}); 
+</insert>
+<!--  게시글 수정  -->
+<update id="edit" parameterType="com.season.semiproject.vo.Community"> 
+	update community 
+	set community_title = #{communityTitle}, community_body = #{communityBody}, latitude = #{latitude}, longitude = #{longitude} 
+	where community_pk = #{communityPk}; 
+</update>
+<!--  게시글 삭제  -->
+<delete id="deleteCommunity" parameterType="int"> delete from community where community_pk = #{communityPk}; </delete>
+<!--   댓글 조회   -->
+<!--  댓글 조회  -->
+   <select id="getCommentsByCommunityId" parameterType="int" resultType="com.season.semiproject.vo.Comment"> 
+      select c.comment_pk as commentPk
+      , c.community_pk as communityPk
+      , c.user_nickname as userNickname
+      , c.user_id as userId
+      , c.comment_body as commentBody 
+      , DATE_FORMAT(c.comment_reg_date, '%Y-%m-%d') AS commentRegDate 
+      from community_comment c left join user u on c.user_id = u.user_id
+      where c.community_pk = #{communityPk}
+      order by c.comment_reg_date deSC;
+   </select>
+   <select id="getCommentCount" parameterType="int" resultType="com.season.semiproject.vo.Community"> 
+      select count(*) AS count
+      where c.community_pk = #{communityPk}
+   </select>
+   
+<!--   댓글 추가   -->
+<insert id="createComment" parameterType="com.season.semiproject.vo.Comment"> 
+	INSERT INTO community_comment (community_pk, user_nickname, comment_body, comment_reg_date) 
+	VALUES (#{communityPk}, #{userNickname}, #{commentBody}, NOW()); 
+</insert>
+
+<!--  좋아요 수 증가  -->
+   <insert id="increaseLikes" parameterType="com.season.semiproject.vo.Community">
+   insert into community_likes(user_id, community_pk) values (#{userId}, #{communityPk});
+   </insert>
+   
+
+<!-- 좋아요 삭제 -->
+   <delete id="decreaseLikes" parameterType="com.season.semiproject.vo.Community">
+       DELETE FROM community_likes WHERE user_id = #{userId} AND community_pk = #{communityPk};
+   </delete>
+
+<!-- 좋아요 확인 -->
+   <select id="isLiked" parameterType="com.season.semiproject.vo.Community" resultType="int">
+    SELECT COUNT(*) 
+FROM community_likes
+    WHERE user_id = #{userId} AND community_pk = #{communityPk};
+   </select>
+   
+
+<!--  임시  -->
+<select id="getCommunityByCourse" parameterType="String" resultType="com.season.semiproject.vo.Community"> 
+	select community_pk AS communityPk, 
+	user_id AS userId, 
+	course_name AS courseName, 
+	user_nickname AS userNickName,
+	community_url AS communityUrl, 
+	community_title AS communityTitle, 
+	community_body AS communityBody, 
+	community_reg_date AS communityRegDate, 
+	latitude, 
+	longitude 
+	from community 
+	where course_name = #{courseName}
+</select>
+
+</mapper>

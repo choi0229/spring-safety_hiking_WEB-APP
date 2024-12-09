@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="mapper-mountain">
+   
+       <!-- 모든 산 목록 가져오기 -->
+    <select id="getAllMountains" resultType="com.season.semiproject.vo.Mountain">
+        SELECT 
+            mountain_id AS mountainId,
+            mountain_name AS mountainName,
+            mountain_image AS mountainImage,
+            mountain_location AS mountainLocation,
+            mountain_content AS mountainContent,
+            mountain_lat AS mountainLat,
+            mountain_lon AS mountainLon
+        FROM 
+            mountain
+    </select>
+    
+        <!-- 특정 ID의 산 정보 가져오기 -->
+    <select id="getMountainById" parameterType="int" resultType="com.season.semiproject.vo.Mountain">
+        SELECT 
+            mountain_id AS mountainId,
+            mountain_name AS mountainName,
+            mountain_image AS mountainImage,
+            mountain_location AS mountainLocation,
+            mountain_content AS mountainContent,
+            mountain_lat AS mountainLat,
+            mountain_lon AS mountainLon
+        FROM 
+            mountain
+        WHERE 
+            mountain_id = #{mountainId}
+            
+    </select>
+    
+    
+</mapper>

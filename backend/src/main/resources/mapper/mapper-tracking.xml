@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="mapper-tracking">
+<!--  path 테이블에 경로 정보 저장  -->
+<insert id="insertPathInfo" parameterType="com.season.semiproject.vo.PathInfoVO" useGeneratedKeys="true" keyProperty="pathId">
+	INSERT INTO path_info (user_id, end_time, total_distance, path_img, total_time) 
+	VALUES (#{userId}, now(), #{totalDistance}, #{pathImg}, #{totalTime}) 
+</insert>
+<!--  path에 해당하는 위도 경도 정보 저장  -->
+<insert id="insertTrackingPath" parameterType="com.season.semiproject.vo.TrackingPathVO"> 
+	INSERT INTO tracking_path (path_id, latitude, longitude, altitude, speed, bearing, timelog) 
+	VALUES (#{pathId}, #{latitude}, #{longitude}, #{altitude}, #{speed}, #{bearing}, #{time}) 
+</insert>
+<!--  path 리스트 이미지에 얹을 정보들, 이미지 가져오기  -->
+<select id="getPathList" resultType="com.season.semiproject.vo.PathInfoVO"> 
+	select id, 
+		user_id, 
+		end_time , 
+		total_distance, 
+		path_img, 
+		SUBSTRING(total_time, 4) 
+		totalTime, ROUND(max_altitude, 2) 
+		maxAltitude, ROUND(avg_speed, 2) 
+		avgSpeed 
+	from path_info 
+	order by end_time desc; 
+</select>
+
+</mapper>

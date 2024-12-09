@@ -1,0 +1,87 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="mapper-course">
+
+	<select id="getAllCourses"
+		resultType="com.season.semiproject.vo.Course">
+		SELECT
+		course_id AS courseId,
+		course_name AS courseName,
+		mountain_id AS mountainName,
+		image AS courseImage,
+		video AS courseVideo,
+		course_location AS courseLocation,
+		course_content AS courseContent,
+		distance,
+		duration,
+		course_rate AS courseRate,
+		course_level AS courseLevel,
+		course_lat AS courseLat,
+		course_lon AS courseLon
+		FROM
+		course
+	</select>
+	<!-- 특정 코스 이름 조회 -->
+	<select id="getCourseNameById" resultType="java.lang.String">
+		select course_name
+		from course where course_id = #{courseId} </select>
+		
+		
+		<select id="getCourseByName" resultType="com.season.semiproject.vo.Course" parameterType="String">
+		SELECT
+		course_id AS courseId,
+		course_name AS courseName,
+		mountain_id AS mountainName,
+		image AS courseImage,
+		video AS courseVideo,
+		course_location AS courseLocation,
+		course_content AS courseContent,
+		distance,
+		duration,
+		course_rate AS courseRate,
+		course_level AS courseLevel,
+		course_lat AS courseLat,
+		course_lon AS courseLon
+		from course where course_name = #{courseName} </select>
+		
+		
+		<select id="getCourse" parameterType="int" resultType="com.season.semiproject.vo.Course">
+      select course_id AS courseId,
+            course_name AS courseName,
+            mountain_id AS mountainName,
+            course_location AS courseLocation,
+            course_content AS courseContent,
+            distance,
+            duration,
+            image AS courseImage,
+            video AS courseVideo,
+            course_rate AS courseRate,
+			course_level AS courseLevel,
+            course_lat AS courseLat,
+            course_lon AS courseLon
+      from course
+      where course_id = #{courseId}
+   </select>
+		
+	<!-- 특정 코스 이름 조회 --> 	
+	
+	<!-- 특정 코스 리뷰 조회 -->
+	<select id="getCourseReviews" resultType="com.season.semiproject.vo.Review">
+		select user_id AS userId, review_content AS reviewContent,
+		rating, difficulty, created_at AS date, rating from course_reviews where
+		course_id = #{courseId} order by created_at DESC; 
+	</select>
+	<!-- 특정 코스 별점 조회 -->
+	<select id="getCourseRatings" resultType="java.lang.Integer">
+		select rating from
+		course_reviews where course_id = #{courseId}
+	</select>
+	<!-- 유저 ID나 리뷰 내용 검색 -->
+	<select id="searchCourseReviews" resultType="com.season.semiproject.vo.Review">
+		select user_id AS userId, review_content AS reviewContent,
+		rating, created_at AS date from course_reviews where course_id =
+		#{courseId} and (user_id like CONCAT('%', #{query}, '%') or
+		review_content like CONCAT('%', #{query}, '%'));
+	</select>
+
+</mapper>

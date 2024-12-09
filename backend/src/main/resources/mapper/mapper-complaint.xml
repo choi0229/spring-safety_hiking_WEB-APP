@@ -1,0 +1,140 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="mapper-complaint">
+
+	<select id="getComplaintList" resultType="com.season.semiproject.vo.Complaint">
+		select complaint_no,
+				complaint_title,
+				complaint_content,
+				complaint_type,
+				created_at,
+				updated_at,
+				complaint_img,
+				user_id,
+				mountain_name,
+				latitude,
+				longitude
+		from complaint
+	</select>
+
+<select id="getRecentComplaintList" resultType="com.season.semiproject.vo.Complaint"> 
+      select 
+         complaint_no, 
+         complaint_title, 
+         complaint_content, 
+         complaint_type, 
+         complaint_state,
+         created_at, 
+         updated_at, 
+         complaint_img, 
+         user_id, 
+         mountain_name, 
+         latitude, 
+         longitude,
+         institution
+      from complaint 
+      order by created_at desc, updated_at desc; 
+   </select>
+
+	<insert id="insertComplaint" parameterType="com.season.semiproject.vo.Complaint">
+		insert into complaint(complaint_title, complaint_content, complaint_type, created_at, updated_at, 
+				complaint_img, user_id, mountain_name, latitude, longitude)
+		values(#{complaintTitle}, #{complaintContent}, #{complaintType}, now(), now(), 
+				#{complaintImg}, #{userId}, #{mountainName}, #{latitude}, #{longitude})
+	</insert>
+	
+	<select id="getComplaint" parameterType="int" resultType="com.season.semiproject.vo.Complaint">
+		select complaint_no,
+				complaint_title,
+				complaint_content,
+				complaint_type,
+				created_at,
+				updated_at,
+				complaint_img,
+				user_id,
+				mountain_name,
+				latitude,
+				longitude,
+         		institution
+		from complaint
+		where complaint_no = #{complaintNo}
+	</select>
+	
+	<delete id="deleteComplaintByNo" parameterType="int">
+		delete from complaint where complaint_no = #{complaintNo}
+	</delete>
+	
+	<update id="updateComplaint" parameterType="com.season.semiproject.vo.Complaint">
+		update complaint set
+		complaint_title = #{complaintTitle}, complaint_content = #{complaintContent}, complaint_type = #{complaintType}, updated_at = now(),
+		mountain_name = #{mountainName}, latitude = #{latitude}, longitude = #{longitude}, complaint_img = #{complaintImg}
+		where complaint_no = #{complaintNo}
+	</update>
+	
+	<select id="getProcessing" parameterType="int" resultType="com.season.semiproject.vo.Processing">
+		select processing_no,
+				processing_content,
+				processor,
+				processing_complaint_no,
+				created_at,
+				processing_img
+		from processing
+		where processing_complaint_no = #{processingComplaintNo}
+	</select>
+	
+	<insert id="insertProcessing" parameterType="com.season.semiproject.vo.Processing">
+		insert into processing(processing_content, processor, processing_complaint_no, created_at, processing_img) 
+		values(#{processingContent},#{processor},#{processingComplaintNo}, now(), #{processingImg});
+	</insert>
+	
+	<update id="updateProcessing" parameterType="com.season.semiproject.vo.Processing">
+		update processing set
+		processing_content = #{processingContent}, processor = #{processor}, processing_img = #{processingImg}
+		where processing_complaint_no = #{processingComplaintNo}
+	</update>
+	
+	<select id="getComplaintListRank" resultType="com.season.semiproject.vo.Complaint">
+		select 	mountain_name,
+				count(*) AS countComplaint
+		from complaint
+		group by mountain_name
+		ORDER BY countComplaint DESC
+		LIMIT 3
+	</select>
+	
+	<select id="getComplaintByUserId" resultType="com.season.semiproject.vo.Complaint"> 
+		select 
+			complaint_no, 
+			complaint_title, 
+			complaint_content, 
+			complaint_type, 
+			created_at, 
+			updated_at, 
+			complaint_img, 
+			user_id, 
+			mountain_name, 
+			latitude, 
+			longitude 
+		from complaint
+		where user_id = #{userId}
+		order by created_at desc, updated_at desc; 
+	</select>
+	
+	<select id="getComplaintListByInst" parameterType="String" resultType="com.season.semiproject.vo.Complaint">
+		select complaint_no, 
+		complaint_title, 
+		complaint_content,
+		complaint_type, 
+		complaint_state, 
+		created_at, 
+		updated_at, 
+		complaint_img, 
+		user_id, 
+		mountain_name, 
+		latitude, 
+		longitude, 
+		institution 
+		from complaint where institution = #{institution} order by created_at desc 
+	</select>
+	
+</mapper>

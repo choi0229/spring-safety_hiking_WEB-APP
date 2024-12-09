@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper  namespace="com.season.semiproject.dao.UserDAO">
+ 
+  <!-- 모든 userId를 조회하는 쿼리 -->
+    <select id="getAllUserIds_vo2" resultType="string">
+        SELECT user_id FROM user
+    </select>
+
+    <!-- userId로 FCM 토큰을 조회하는 쿼리 -->
+    <select id="getFcmTokenByUserId" parameterType="string" resultType="string">
+        SELECT fcm_token FROM usernotification WHERE user_id = #{userId}
+    </select>
+    
+     <!-- 모든 사용자의 FCM 토큰을 조회하는 쿼리 -->
+    <select id="getAllFcmTokens" resultType="string">
+        SELECT fcm_token FROM usernotification WHERE fcm_token IS NOT NULL
+    </select>
+    
+    <insert id="saveNotificationData" parameterType="com.season.semiproject.vo.NotificationRequest">
+    INSERT INTO usernotification (user_id, fcm_token)
+    VALUES (#{userId}, #{token});
+	</insert>
+	
+	<update id="updateNotificationData" parameterType="com.season.semiproject.vo.NotificationRequest">
+    UPDATE usernotification
+    SET fcm_token = #{token}
+    WHERE user_id = #{userId}
+	</update>
+	
+	<select id="getNotificationDataByUserId" parameterType="string" resultType="com.season.semiproject.vo.NotificationRequest">
+    SELECT * FROM usernotification WHERE user_id = #{userId}
+	</select>	
+	
+	 <!-- userId로 user_nickname을 조회하는 쿼리 -->
+    <select id="getUserNickNameByUserId" parameterType="string" resultType="string">
+        SELECT user_nickname FROM user WHERE user_id = #{userId}
+    </select>
+	
+</mapper>

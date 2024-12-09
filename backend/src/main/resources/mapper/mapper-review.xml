@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="mapper-review">
+	<!--  리뷰 작성  -->
+	<insert id="insertReview" parameterType="com.season.semiproject.vo.Review">
+		insert into course_reviews (course_id, user_id, review_content, rating, image_path, difficulty, created_at) 
+		values (#{courseId}, #{userId}, #{reviewContent}, #{rating}, #{imagePath}, #{difficulty}, now()); 
+	</insert>
+	<!--  리뷰 수정  -->
+	<update id="updateReview" parameterType="com.season.semiproject.vo.Review">
+		update course_reviews 
+		set review_content = #{reviewContent}, rating = #{rating}, difficulty = #{difficulty} 
+		where review_id = #{id}; 
+	</update>
+	<!--  리뷰 삭제  -->
+	<delete id="deleteReview" parameterType="int">
+		delete from course_reviews where review_id = #{reviewId}; 
+	</delete>
+	<!--  리뷰 검색  -->
+	<select id="searchReviews" parameterType="map" resultType="com.season.semiproject.vo.Review"> 
+		select review_id as reviewId,
+			course_id as courseId,
+			user_id as userId,
+			review_content as reviewContent,
+			rating,
+			image_path as imagePath,
+			difficulty,
+			created_at as createdAt
+		from course_reviews 
+		where course_id = #{courseId} and (review_content LIKE #{query} OR user_id LIKE #{query}); 
+	</select>
+</mapper>
