@@ -1,0 +1,222 @@
+/** 메인 페이지 헤드라인 */
+
+
+/* 메인화면 동적 타이틀 뒤에 보이는 사진 */
+  
+#main-nav {
+  position: relative;
+  width: 1920px; 
+  height: 630px; 
+  overflow: hidden; 
+  transition: height 0.8s ease-in-out;
+}
+
+.main-image {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+  
+
+/* 동적 타이틀 */
+
+#mainTitle1{
+    position: absolute; 
+    top: 220px; 
+    left: 130px; 
+    z-index: 1; 
+    color: rgb(255, 255, 255); 
+    font-weight: bold; 
+    font-size: 70px;
+    margin-left: 8em;
+    transition: opacity 0.5s ease-in-out;
+  }
+
+  /* 메뉴 클릭시 나오는 타이틀 */
+
+  #mainTitle2{
+    position: absolute; 
+    top: 50%; 
+    left: 50%; 
+    transform: translate(-50%, -50%); 
+    z-index: 2; 
+    color: white; 
+    opacity: 0; 
+    font-weight: bolder; 
+    font-size: 100px;
+    transition: opacity 0.5s ease-in-out;
+  }
+
+  /* 메인 창 검색 칸 */
+
+  #mainInput1{
+    width: 1050px; 
+    height: 70px; 
+    margin-left: 28em; 
+    margin-top: -10em;
+    margin-bottom: 12em;
+  }
+
+  /* 메인 창 검색 버튼 */
+
+  #CourseSearchButton{
+    background-color: white; 
+    margin-left: 1em;
+  }
+
+  /*메인 창 코스 목록 카드 */
+
+  .custom-gab{
+      gap: 1.5rem;
+  }
+
+  .custom-gab2{
+    gap: 5rem;
+}
+
+  .mountainCourseCard{
+    position: relative; 
+    top:0;
+    left: 0; 
+    margin-top: 0.9em; 
+    margin-left: 18.2em; 
+    background-color: white; 
+    width: 19em;            
+  }
+
+  /* 메인 창 코스 목록 카드 내부 이미지 */
+
+  #mountainImage{
+    width: auto; 
+    height: 200px; 
+    object-fit: cover;
+  }
+
+  /* 산 이름 */
+
+  #mountain_name{
+      font-size: 20px;
+      font-weight: 500;
+  }
+
+  /* 산 위치 정보 */
+
+  #mountain_location{
+      font-size: 14px;
+      margin-top: -1em;
+      opacity: 0.5;
+  }
+
+  /* 산 내용 줄임표 적용을 위한 스타일 */
+
+  #mountain_content{
+    overflow: hidden;                  /* 넘치는 내용을 숨김 */
+    display: -webkit-box;              /* flexbox와 유사한 박스 모델 */
+    -webkit-line-clamp: 4;             /* 표시할 최대 줄 수 */
+    -webkit-box-orient: vertical;      /* 박스 방향을 수직으로 설정 */
+    white-space: normal;               /* 여러 줄을 사용하도록 설정 */
+    font-size: 13px;
+  }
+
+  /* 카드 호버시 액션 */
+
+  .mountainCourseCard:hover {
+    transform: scale(1.05);
+    cursor:pointer;
+  }
+
+  /* 카드 호버시 액션2 */
+
+  .mountainCourseCard {
+    width: 100%;
+    height: auto;
+    transition: transform 0.3s ease-in-out;
+  }
+
+  /* 카드 호버시 액션3 */
+  .HelpCard:hover{
+    transform: scale(1.05);
+    cursor:pointer;
+  }
+
+   /* 카드 호버시 액션4 */
+  .HelpCard{
+    width: 100%;
+    height: auto;
+    transition: transform 0.3s ease-in-out;
+  }
+
+  .card-wrapper {
+    opacity: 1;
+    transition: opacity 0.8s ease-in-out, transform 0.8s ease-in-out;
+  }
+
+  #inforTitle{
+    margin-top: 4em;
+    margin-bottom: -5em;
+    margin-left: 24em;
+  }
+
+  #helpTitle{
+    font-size: 25px;
+    font-weight: bold;
+    margin-top: 1em;
+  }
+
+  #helpTitleContent1{
+    font-size: 14px;
+  }
+
+  #helpTitleContent2{
+    font-size: 14px;
+    margin-top: -1em;
+  }
+
+  #subTitle1{
+    background-color: rgb(255, 247, 235);
+    width: auto;
+    height: 450px;
+    margin-top: 6em;
+  }
+
+  /* 전체 뒷 배경 색 */
+  
+  #app{
+    background-color: #ffffff;
+    min-height: 100vh;
+  }
+
+
+/* 스크롤 가능한 컨텐츠 스타일 */
+.scrollable {
+overflow: overlay; /* 스크롤이 필요한 경우에만 스크롤바가 나타나고, 스크롤이 없으면 스크롤바가 보이지 않음 */
+max-height: 100vh;
+}
+
+/* 커스텀 스크롤바 스타일 */
+.scrollable::-webkit-scrollbar {
+width: 12px;
+}
+
+.scrollable::-webkit-scrollbar-track {
+background: #f0f0f0;
+border-radius: 10px;
+}
+
+.scrollable::-webkit-scrollbar-thumb {
+background: #888;
+border-radius: 10px;
+}
+
+.scrollable::-webkit-scrollbar-thumb:hover {
+background: #555;
+}
+
+  /* 기본 상태: 100% 크기 */
+body {
+  transform: scale(1);
+  transform-origin: top left; /* 확대/축소의 기준점 */
+  width: 100%;
+  height: 100%;
+  
+}
