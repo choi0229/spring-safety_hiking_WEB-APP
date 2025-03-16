@@ -1,0 +1,12 @@
+{
+"type": "FeatureCollection",
+"name": "화장실",
+"crs": { "type": "name", "properties": { "name": "urn:ogc:def:crs:OGC:1.3:CRS84" } },
+"features": [
+{ "type": "Feature", "properties": { "image": "toilet2.jpg", "SAFE_SPOT1": "05", "SAFE_SPOT2": "화장실", "SAFE_SPOT3": "벤치,화장실", "MNAGN_NM": null, "ETC_MATTER": null, "MNTN_NM": "인왕산", "MNTN_NM2": "무악동" }, "geometry": { "type": "Point", "coordinates": [ 126.958824, 37.579158 ] } },
+{ "type": "Feature", "properties": { "image": "toilet.jpg", "SAFE_SPOT1": "05", "SAFE_SPOT2": "화장실", "SAFE_SPOT3": "벤치,화장실", "MNAGN_NM": null, "ETC_MATTER": null, "MNTN_NM": "인왕산", "MNTN_NM2": "무악동" }, "geometry": { "type": "Point", "coordinates": [ 126.958407, 37.579779 ] } },
+{ "type": "Feature", "properties": { "image": "toilet.jpg", "SAFE_SPOT1": "05", "SAFE_SPOT2": "화장실", "SAFE_SPOT3": "벤치,화장실", "MNAGN_NM": null, "ETC_MATTER": null, "MNTN_NM": "인왕산", "MNTN_NM2": "부암동" }, "geometry": { "type": "Point", "coordinates": [ 126.960662597900011, 37.591857248212155 ] } },
+{ "type": "Feature", "properties": { "image": "toilet2.jpg", "SAFE_SPOT1": "05", "SAFE_SPOT2": "화장실", "SAFE_SPOT3": "벤치,화장실", "MNAGN_NM": null, "ETC_MATTER": null, "MNTN_NM": "인왕산", "MNTN_NM2": "홍제동" }, "geometry": { "type": "Point", "coordinates": [ 126.955614248240011, 37.58207756944293 ] } },
+{ "type": "Feature", "properties": { "image": "toilet2.jpg", "SAFE_SPOT1": "05", "SAFE_SPOT2": "화장실", "SAFE_SPOT3": "벤치,화장실", "MNAGN_NM": null, "ETC_MATTER": null, "MNTN_NM": "북한산_백운대", "MNTN_NM2": "마루" }, "geometry": { "type": "Point", "coordinates": [ 126.963098378522801, 37.619244836159815 ] } }
+]
+}
