@@ -17,7 +17,7 @@ public class FirebaseConfig {
     public void initializeFirebaseApp() {
         try {
             // Firebase 서비스 계정 키 JSON 파일의 경로
-            InputStream serviceAccount = getClass().getClassLoader().getResourceAsStream("firebase-service-account.json");
+            InputStream serviceAccount = getClass().getClassLoader().getResourceAsStream("FIREBASE_SERVICE_ACCOUNT");
             if (serviceAccount == null) {
                 throw new IOException("Firebase 서비스 계정 키 파일을 찾을 수 없습니다.");
             }
