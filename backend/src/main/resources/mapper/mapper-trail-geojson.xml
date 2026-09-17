@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<!--
+  Phase 9A Trail GeoJSON compatibility API. Used by
+  com.season.semiproject.spatial.geojson.TrailGeoJsonDAO, exposed through
+  GET /api/spatial/trails/geojson.
+
+  Single query builds the entire FeatureCollection JSON string in PostgreSQL (json_build_object +
+  json_agg), so no per-row Java geometry DTO assembly and no N+1 (one query regardless of the
+  1706-row TrailFeature count). Ordered by source_feature_index, the absolute original
+  FeatureCollection order; NOT (trail_id, sequence), which only coincidentally matches it today
+  (see docs/06-frontend-api-compatibility.md).
+
+  ST_AsGeoJSON(tf.geom, 15) explicitly requests 15 decimal digits; the default (no digits argument)
+  truncates to 9 digits, which does not corrupt spatial correctness but does silently change the
+  coordinate values the Frontend receives compared to the original static file.
+
+  COALESCE around json_agg(...) is required: PostgreSQL's json_agg over zero input rows returns
+  SQL NULL (a query with an aggregate and no GROUP BY still returns exactly one row), which would
+  otherwise produce {"type":"FeatureCollection","features":null} instead of an empty array.
+-->
+<mapper namespace="mapper-trail-geojson">
+
+	<select id="getTrailFeatureCollectionJson" resultType="string">
+		SELECT json_build_object(
+			'type', 'FeatureCollection',
+			'features', COALESCE(json_agg(
+				json_build_object(
+					'type', 'Feature',
+					'properties', json_build_object(
+						'PMNTN_NM', t.source_course_name,
+						'DN', tf.dn_value
+					),
+					'geometry', ST_AsGeoJSON(tf.geom, 15)::json
+				) ORDER BY tf.source_feature_index
+			), '[]'::json)
+		)::text
+		FROM trail_feature tf
+		JOIN trail t ON t.id = tf.trail_id
+	</select>
+
+</mapper>

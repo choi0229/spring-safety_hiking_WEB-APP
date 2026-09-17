@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<!--
+  Phase 8 accident import mapper. Used only by
+  com.season.semiproject.spatial.accident.AccidentImportService, which runs under the
+  `spatial-accident-import` Spring profile (see application-spatial-accident-import.properties).
+  Not exposed through any Controller/API.
+-->
+<mapper namespace="mapper-accident-import">
+
+	<!-- source_file replace strategy: delete any previous import for this file first. -->
+	<delete id="deleteAccidentPointsBySourceFile" parameterType="String">
+		DELETE FROM accident_point WHERE source_file = #{value}
+	</delete>
+
+	<!-- Point geometry stored via ST_MakePoint rather than ST_GeomFromGeoJSON; simplest option
+	     for a plain 2-coordinate Point (no GeoJSON fragment serialization needed, unlike the
+	     MultiLineString Trail geometry in mapper-trail-import.xml).
+	     raw_properties is bound as a plain String parameter and cast to JSONB in SQL; this avoids
+	     needing a custom MyBatis TypeHandler or a new dependency. -->
+	<insert id="insertAccidentPoint" parameterType="com.season.semiproject.spatial.accident.AccidentPointInsertParam">
+		INSERT INTO accident_point (
+			source_file, source_feature_index, report_no, dispatch_date,
+			accident_type, location_name, geom, raw_properties
+		) VALUES (
+			#{sourceFile},
+			#{sourceFeatureIndex},
+			#{reportNo},
+			#{dispatchDate},
+			#{accidentType},
+			#{locationName},
+			ST_SetSRID(ST_MakePoint(#{lng}, #{lat}), 4326),
+			CAST(#{rawPropertiesJson} AS JSONB)
+		)
+	</insert>
+
+</mapper>

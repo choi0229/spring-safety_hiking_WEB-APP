@@ -4,7 +4,7 @@
  
   <!-- 모든 userId를 조회하는 쿼리 -->
     <select id="getAllUserIds_vo2" resultType="string">
-        SELECT user_id FROM user
+        SELECT user_id FROM app_user
     </select>
 
     <!-- userId로 FCM 토큰을 조회하는 쿼리 -->
@@ -34,7 +34,7 @@
 	
 	 <!-- userId로 user_nickname을 조회하는 쿼리 -->
     <select id="getUserNickNameByUserId" parameterType="string" resultType="string">
-        SELECT user_nickname FROM user WHERE user_id = #{userId}
+        SELECT user_nickname FROM app_user WHERE user_id = #{userId}
     </select>
 	
 </mapper>

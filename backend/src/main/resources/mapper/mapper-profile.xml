@@ -9,7 +9,7 @@
 
 	<!-- mapper-profile.xml -->
 	<select id="getUserById" parameterType="String" resultType="String">
-	    SELECT user_id FROM user WHERE user_id = #{userId}
+	    SELECT user_id FROM app_user WHERE user_id = #{userId}
 	</select>
 
     <!-- 특정 유저의 프로필 이미지 가져오기 -->

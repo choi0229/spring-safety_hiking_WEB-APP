@@ -18,10 +18,10 @@
 		end_time , 
 		total_distance, 
 		path_img, 
-		SUBSTRING(total_time, 4) 
-		totalTime, ROUND(max_altitude, 2) 
-		maxAltitude, ROUND(avg_speed, 2) 
-		avgSpeed 
+		SUBSTRING(total_time, 4)
+		totalTime, ROUND(max_altitude, 2)
+		maxAltitude, ROUND(avg_speed::numeric, 2)
+		avgSpeed
 	from path_info 
 	order by end_time desc; 
 </select>

@@ -1,0 +1,61 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<!--
+  Phase 8 Derived Spatial Relation queries between accident_point (Raw) and trail_segment
+  (Derived Network). Used by com.season.semiproject.spatial.query.SpatialQueryDAO, exposed
+  through SpatialQueryController (/api/spatial/...).
+
+  Distance is always computed with ::geography casts (ST_DWithin/ST_Distance) so the unit is
+  guaranteed to be meters, never raw geometry/degree distance.
+
+  IMPORTANT: these two "nearby within N meters" queries are deliberately EXHAUSTIVE; they do
+  NOT pre-filter candidates with the geometry KNN operator before applying ST_DWithin with a
+  fixed LIMIT. A KNN LIMIT is only safe for "give me the nearest K candidates"; for "give me EVERY
+  candidate within N meters" it can silently drop real matches that exist within the threshold but
+  outside the KNN candidate window. See docs/05-accident-spatial-query.md for the EXPLAIN ANALYZE
+  results and the reasoning for not adding a functional geography GiST index at this data scale.
+-->
+<mapper namespace="mapper-spatial-query">
+
+	<select id="countAccidentById" parameterType="long" resultType="int">
+		SELECT COUNT(*) FROM accident_point WHERE id = #{value}
+	</select>
+
+	<select id="countSegmentById" parameterType="long" resultType="int">
+		SELECT COUNT(*) FROM trail_segment WHERE id = #{value}
+	</select>
+
+	<!-- API A: one Accident -> every TrailSegment within distanceMeters, nearest first. -->
+	<select id="findSegmentsNearAccident" resultType="com.season.semiproject.spatial.query.NearbySegmentRow">
+		SELECT
+			ts.id AS segmentId,
+			t.id AS trailId,
+			t.source_course_name AS sourceCourseName,
+			ts.source_trail_feature_id AS sourceTrailFeatureId,
+			ST_Distance(a.geom::geography, ts.geom::geography) AS distanceMeters
+		FROM accident_point a
+		JOIN trail_segment ts
+			ON ST_DWithin(a.geom::geography, ts.geom::geography, #{distanceMeters})
+		JOIN trail_feature tf ON tf.id = ts.source_trail_feature_id
+		JOIN trail t ON t.id = tf.trail_id
+		WHERE a.id = #{accidentId}
+		ORDER BY ST_Distance(a.geom::geography, ts.geom::geography) ASC
+	</select>
+
+	<!-- API B: one TrailSegment -> every AccidentPoint within distanceMeters, nearest first. -->
+	<select id="findAccidentsNearSegment" resultType="com.season.semiproject.spatial.query.NearbyAccidentRow">
+		SELECT
+			a.id AS accidentId,
+			a.report_no AS reportNo,
+			a.dispatch_date AS dispatchDate,
+			a.accident_type AS accidentType,
+			a.location_name AS locationName,
+			ST_Distance(a.geom::geography, ts.geom::geography) AS distanceMeters
+		FROM trail_segment ts
+		JOIN accident_point a
+			ON ST_DWithin(a.geom::geography, ts.geom::geography, #{distanceMeters})
+		WHERE ts.id = #{segmentId}
+		ORDER BY ST_Distance(a.geom::geography, ts.geom::geography) ASC
+	</select>
+
+</mapper>

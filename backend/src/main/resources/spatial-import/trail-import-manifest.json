@@ -1,0 +1,71 @@
+{
+  "_comment": "Phase 5 Import Manifest. Hand-verified against the actual GeoJSON file and the live `course` table -- not generated. `sourceMountainName` values come directly from the GeoJSON `properties.MNTN_NM` field (verified to exist and to vary within this single file -- it is NOT derived from the file name). See docs/02-migration-and-data-quality.md, 'Spatial Data Import' section, for the full evidence behind each mappingStatus/mappingReason and each excluded feature.",
+  "sourceFile": "인왕산ele copy.geojson",
+  "trails": [
+    {
+      "pmntnNm": "마루",
+      "sourceMountainName": "북한산_백운대",
+      "sourceCourseName": "마루",
+      "courseId": null,
+      "mappingStatus": "UNVERIFIED",
+      "mappingReason": "course.mountain_id('북한산_백운대')와 course.course_name('마루')은 정확히 일치하지만, course.course_lat/course_lon(37.660833, 126.993333)이 이 코스에 속한 GeoJSON 좌표 전체(1275개 Feature) 중 가장 가까운 점(126.9970429280802, 37.65605035388717)과도 약 624m 떨어져 있다. 부암동/무악동/홍제동 3개 코스는 좌표가 0.1m 이내로 일치하는 반면 이 코스만 유독 멀리 떨어져 있어, 이름/산 일치만으로 연결을 확정할 만한 독립적 좌표 근거가 없다고 판단했다. 이름이 같다는 이유만으로 자동 연결하지 않는다는 원칙에 따라 course_id를 NULL로 유지한다.",
+      "note": "북한산_백운대 소속 코스. 1275개 Feature 중 4개는 noise(excludedFeatures 참고)로 제외, 8개는 geometry 이상으로 제외."
+    },
+    {
+      "pmntnNm": "무악동구간",
+      "sourceMountainName": "인왕산",
+      "sourceCourseName": "무악동구간",
+      "courseId": 3,
+      "mappingStatus": "VERIFIED",
+      "mappingReason": "course.mountain_id('인왕산') 정확히 일치. course.course_lat/course_lon(37.577209, 126.959908)이 GeoJSON 좌표 (126.95990890510679, 37.577209638559836)와 약 0.107m 이내로 일치(사실상 동일 지점, 부동소수점 표현 차이 수준). course.course_name('무악동')은 source_course_name('무악동구간')의 '구간'을 뗀 접두어와 일치.",
+      "note": "인왕산 소속 코스, 216개 Feature."
+    },
+    {
+      "pmntnNm": "홍제동구간",
+      "sourceMountainName": "인왕산",
+      "sourceCourseName": "홍제동구간",
+      "courseId": 4,
+      "mappingStatus": "VERIFIED",
+      "mappingReason": "course.mountain_id('인왕산') 정확히 일치. course.course_lat/course_lon(37.582725, 126.956758)이 GeoJSON 좌표 (126.95675898417585, 37.58272532513246)와 약 0.094m 이내로 일치. course.course_name('홍제동')은 source_course_name('홍제동구간')의 접두어와 일치.",
+      "note": "인왕산 소속 코스, 109개 Feature 중 1개는 geometry 이상으로 제외."
+    },
+    {
+      "pmntnNm": "부암동구간",
+      "sourceMountainName": "인왕산",
+      "sourceCourseName": "부암동구간",
+      "courseId": 2,
+      "mappingStatus": "VERIFIED",
+      "mappingReason": "course.mountain_id('인왕산') 정확히 일치. course.course_lat/course_lon(37.590870, 126.958077)이 GeoJSON 좌표 (126.9580772870221, 37.590870801032246)와 약 0.093m 이내로 일치. course.course_name('부암동')은 source_course_name('부암동구간')의 접두어와 일치.",
+      "note": "인왕산 소속 코스, 115개 Feature."
+    }
+  ],
+  "excludedFeatures": [
+    { "sourceFeatureIndex": 61, "pmntnNm": " ", "category": "EXCLUDED_SOURCE_FEATURE",
+      "reason": "PMNTN_NM이 공백이라 4개 대상 코스 중 어디에도 매칭되지 않음. DN=177로 바로 앞뒤(index 60=176, index 62=178) '마루' Feature의 DN 연속 흐름 한가운데 위치해 지리적으로는 마루 구간의 일부로 보이나, 코스명 라벨이 누락되어 있어 (source_file, PMNTN_NM) 그룹화 규칙상 제외한다." },
+    { "sourceFeatureIndex": 167, "pmntnNm": " ", "category": "EXCLUDED_SOURCE_FEATURE",
+      "reason": "PMNTN_NM 공백. DN=298, 앞뒤(297/299) 마루 DN 연속 구간 한가운데 위치. 61번과 동일한 사유로 제외." },
+    { "sourceFeatureIndex": 189, "pmntnNm": " ", "category": "EXCLUDED_SOURCE_FEATURE",
+      "reason": "PMNTN_NM 공백. DN=320, 앞뒤(319/321) 마루 DN 연속 구간 한가운데 위치. 61번과 동일한 사유로 제외." },
+    { "sourceFeatureIndex": 1202, "pmntnNm": " ", "category": "EXCLUDED_SOURCE_FEATURE",
+      "reason": "PMNTN_NM 공백. DN=172, 앞뒤(173/171) 마루 DN 연속 구간 한가운데 위치. 61번과 동일한 사유로 제외." },
+
+    { "sourceFeatureIndex": 11, "pmntnNm": "마루", "category": "INVALID_GEOMETRY_SOURCE_FEATURE",
+      "reason": "MultiLineString의 두 sub-line이 각각 좌표 1개짜리 degenerate line(coordinates=[[[lon,lat]],[[lon,lat]]]). 유효한 LineString은 최소 2개 좌표가 필요하므로 구조적으로 무효." },
+    { "sourceFeatureIndex": 371, "pmntnNm": "마루", "category": "INVALID_GEOMETRY_SOURCE_FEATURE",
+      "reason": "MultiLineString 전체가 좌표 1개짜리 단일 sub-line뿐임(coordinates=[[[lon,lat]]]). 라인이 아닌 점 하나만 존재." },
+    { "sourceFeatureIndex": 372, "pmntnNm": "마루", "category": "INVALID_GEOMETRY_SOURCE_FEATURE",
+      "reason": "371과 동일 사유. 좌표 1개짜리 단일 sub-line뿐." },
+    { "sourceFeatureIndex": 373, "pmntnNm": "마루", "category": "INVALID_GEOMETRY_SOURCE_FEATURE",
+      "reason": "371과 동일 사유. 좌표 1개짜리 단일 sub-line뿐." },
+    { "sourceFeatureIndex": 998, "pmntnNm": "마루", "category": "INVALID_GEOMETRY_SOURCE_FEATURE",
+      "reason": "MultiLineString에 유효한 3점 sub-line과 좌표 1개짜리 degenerate sub-line이 함께 존재. 일부만 취사선택해 조용히 보정하지 않고 Feature 전체를 제외한다." },
+    { "sourceFeatureIndex": 999, "pmntnNm": "마루", "category": "INVALID_GEOMETRY_SOURCE_FEATURE",
+      "reason": "MultiLineString의 sub-line 3개 중 2개가 좌표 1개짜리 degenerate line." },
+    { "sourceFeatureIndex": 1192, "pmntnNm": "마루", "category": "INVALID_GEOMETRY_SOURCE_FEATURE",
+      "reason": "371과 동일 사유. 좌표 1개짜리 단일 sub-line뿐." },
+    { "sourceFeatureIndex": 1276, "pmntnNm": "마루", "category": "INVALID_GEOMETRY_SOURCE_FEATURE",
+      "reason": "371과 동일 사유. 좌표 1개짜리 단일 sub-line뿐." },
+    { "sourceFeatureIndex": 1522, "pmntnNm": "홍제동구간", "category": "INVALID_GEOMETRY_SOURCE_FEATURE",
+      "reason": "MultiLineString에 유효한 5점 sub-line과 좌표 1개짜리 degenerate sub-line이 함께 존재. 998과 동일 사유로 Feature 전체 제외." }
+  ]
+}

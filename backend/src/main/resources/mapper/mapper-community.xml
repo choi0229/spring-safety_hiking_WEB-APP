@@ -13,8 +13,8 @@
       c.community_body as communityBody, 
       c.public_state as publicState,
       c.safe_state as safeState,
-      DATE_FORMAT(community_reg_date, '%Y-%m-%d') as communityRegDate, 
-      latitude, 
+      TO_CHAR(community_reg_date, 'YYYY-MM-DD') as communityRegDate,
+      latitude,
       longitude,
       (select count(distinct m.comment_pk) from community_comment m where m.community_pk = c.community_pk) as commentCount,
       (select count(distinct l.likes_id) from community_likes l where l.community_pk = c.community_pk) as likes
@@ -33,8 +33,8 @@
       c.community_body as communityBody, 
       c.public_state as publicState,
       c.safe_state as safeState,
-      DATE_FORMAT(community_reg_date, '%Y-%m-%d') as communityRegDate, 
-      latitude, 
+      TO_CHAR(community_reg_date, 'YYYY-MM-DD') as communityRegDate,
+      latitude,
       longitude,
       (select count(distinct m.comment_pk) from community_comment m where m.community_pk = c.community_pk) as commentCount,
       (select count(distinct l.likes_id) from community_likes l where l.community_pk = c.community_pk) as likes
@@ -52,10 +52,10 @@
 	c.community_url as communityUrl, 
 	c.community_title as communityTitle, 
 	c.community_body as communityBody, 
-	DATE_FORMAT(c.community_reg_date, '%Y-%m-%d') as communityRegDate, 
-	c.latitude, 
-	c.longitude 
-	from community c left join user u on c.user_id = u.user_id where c.community_pk = #{communityPk}; 
+	TO_CHAR(c.community_reg_date, 'YYYY-MM-DD') as communityRegDate,
+	c.latitude,
+	c.longitude
+	from community c left join app_user u on c.user_id = u.user_id where c.community_pk = #{communityPk};
 </select>
 <!--  최근 게시글 불러오기  -->
 	<select id="getLatestCommunities" resultType="com.season.semiproject.vo.Community"> 
@@ -66,8 +66,8 @@
 	</select>
 <!--  게시글 추가  -->
 <insert id="createCommunity" parameterType="com.season.semiproject.vo.Community"> 
-insert into community (user_id, user_nickname, community_url, community_title, community_body, community_reg_date, latitude, longitude, public_state, safe_state, course_name) 
-values (#{userId}, #{userNickName}, #{communityUrl}, #{communityTitle}, #{communityBody}, sysdate(), #{latitude}, #{longitude}, #{publicState}, #{safeState}, #{courseName}); 
+insert into community (user_id, user_nickname, community_url, community_title, community_body, community_reg_date, latitude, longitude, public_state, safe_state, course_name)
+values (#{userId}, #{userNickName}, #{communityUrl}, #{communityTitle}, #{communityBody}, now(), #{latitude}, #{longitude}, #{publicState}, #{safeState}, #{courseName});
 </insert>
 <!--  게시글 수정  -->
 <update id="edit" parameterType="com.season.semiproject.vo.Community"> 
@@ -85,8 +85,8 @@ values (#{userId}, #{userNickName}, #{communityUrl}, #{communityTitle}, #{commun
       , c.user_nickname as userNickname
       , c.user_id as userId
       , c.comment_body as commentBody 
-      , DATE_FORMAT(c.comment_reg_date, '%Y-%m-%d') AS commentRegDate 
-      from community_comment c left join user u on c.user_id = u.user_id
+      , TO_CHAR(c.comment_reg_date, 'YYYY-MM-DD') AS commentRegDate
+      from community_comment c left join app_user u on c.user_id = u.user_id
       where c.community_pk = #{communityPk}
       order by c.comment_reg_date deSC;
    </select>

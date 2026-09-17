@@ -173,7 +173,7 @@ function initializeMap() {
 
 async function loadGeoJSON2() {
   try {
-    const response = await fetch('/data/인왕산ele copy.geojson'); // GeoJSON 파일 경로
+    const response = await fetch('/api/spatial/trails/geojson'); // GeoJSON API 경로
     if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
     return await response.json();
   } catch (error) {
@@ -184,7 +184,7 @@ async function loadGeoJSON2() {
 // GeoJSON 데이터를 로드
 async function loadGeoJSON() {
   try {
-    const response = await fetch('/data/인왕산ele copy.geojson'); // GeoJSON 파일 경로
+    const response = await fetch('/api/spatial/trails/geojson'); // GeoJSON API 경로
     if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
     return await response.json();
   } catch (error) {

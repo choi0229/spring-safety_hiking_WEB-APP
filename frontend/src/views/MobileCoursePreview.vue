@@ -71,7 +71,7 @@ async function initializeSmallMap() {
     level: 5,
   });
 
-  const geoJsonPath = `/data/인왕산ele copy.geojson`;
+  const geoJsonPath = `/api/spatial/trails/geojson`;
   await loadGeoJSONFromServer(geoJsonPath, smallMap.value);
 }
 

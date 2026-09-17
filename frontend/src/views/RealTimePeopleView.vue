@@ -275,7 +275,7 @@ function initializeMap() {
       level: 5,
       mapTypeId: kakao.maps.MapTypeId.SKYVIEW // 정확한 위성 지도 설정
     });
-    loadGeoJSONFromServer('/data/인왕산ele copy.geojson');  // GeoJSON 파일 경로
+    loadGeoJSONFromServer('/api/spatial/trails/geojson');  // GeoJSON API 경로
   });
   script.src = 'https://dapi.kakao.com/v2/maps/sdk.js?appkey=333bda7da18df138fb4d9b3e5cf351c4&autoload=false';
   document.head.appendChild(script);

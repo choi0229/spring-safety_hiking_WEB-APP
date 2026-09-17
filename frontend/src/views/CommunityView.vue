@@ -218,7 +218,7 @@ const goToMapDetail = async (courseName) => {
 // 처음에 모든 GeoJSON 데이터를 불러와 PMNTN_NM을 키로 하는 객체로 저장
 const loadCourseData = async () => {
   try {
-    const response = await axios.get('/data/인왕산ele copy.geojson');
+    const response = await axios.get('/api/spatial/trails/geojson');
     const geoJsonData = response.data;
 
     geoJsonData.features.forEach(feature => {

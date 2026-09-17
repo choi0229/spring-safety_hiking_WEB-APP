@@ -14,37 +14,37 @@
 		user_address userAddress,
 		user_gender userGender,
 		user_institution userInstitution
-		from user where user_id = #{userId} and
+		from app_user where user_id = #{userId} and
 		user_pw = #{userPw}
 	</select>
 	
 	<insert id="createUser" parameterType="com.season.semiproject.vo.User"> 
-		insert into user(user_id, user_pw, user_name, user_nickname, user_email, user_age, user_address, user_gender, user_institution) 
+		insert into app_user(user_id, user_pw, user_name, user_nickname, user_email, user_age, user_address, user_gender, user_institution)
 		values(#{userId}, #{userPw}, #{userName}, #{userNickName}, #{userEmail}, #{userAge}, #{userAddress}, #{userGender}, #{userInstitution}); 
 	</insert>
 	
 	 <!-- ID 중복 체크 쿼리 -->
     <select id="isIdTaken" parameterType="String" resultType="Integer">
-        SELECT COUNT(*) FROM user WHERE user_id = #{value}
+        SELECT COUNT(*) FROM app_user WHERE user_id = #{value}
     </select>
 
     <!-- Email 중복 체크 쿼리 -->
     <select id="isEmailTaken" parameterType="String" resultType="Integer">
-        SELECT COUNT(*) FROM user WHERE user_email = #{value}
+        SELECT COUNT(*) FROM app_user WHERE user_email = #{value}
     </select>
 
     <!-- NickName 중복 체크 쿼리 -->
     <select id="isNickNameTaken" parameterType="String" resultType="Integer">
-        SELECT COUNT(*) FROM user WHERE user_nickname = #{value}
+        SELECT COUNT(*) FROM app_user WHERE user_nickname = #{value}
     </select>
-	
+
 	<!-- userId 조회 쿼리 -->
     <select id="getAllUserIds" resultType="string">
-        SELECT user_id FROM user
+        SELECT user_id FROM app_user
     </select>
-    
+
     <select id="findUserById" parameterType="String" resultType="com.season.semiproject.vo.User">
-        SELECT * FROM user WHERE user_id = #{userId}
+        SELECT * FROM app_user WHERE user_id = #{userId}
     </select>
     
 </mapper>

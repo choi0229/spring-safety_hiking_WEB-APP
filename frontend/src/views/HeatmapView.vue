@@ -259,7 +259,7 @@ function searchPlaces() {
 async function loadDataAndCharts() {
   await loadComplaintList(leafletMap);
   loadComplaintListRank();
-  await loadGeoJSONFromServer('/data/인왕산ele copy.geojson', leafletMap);
+  await loadGeoJSONFromServer('/api/spatial/trails/geojson', leafletMap);
   loadMonthlyChart();
   loadDoughnutChart();
   loadStatsChart();

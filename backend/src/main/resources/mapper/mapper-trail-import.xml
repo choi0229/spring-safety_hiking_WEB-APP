@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<!--
+  Phase 5 spatial import mapper. Used only by com.season.semiproject.spatial.TrailImportService,
+  which runs under the `spatial-import` Spring profile (see application-spatial-import.properties).
+  Not exposed through any Controller/API.
+-->
+<mapper namespace="mapper-trail-import">
+
+	<!-- source_file replace strategy: delete any previous import for this file first.
+	     ON DELETE CASCADE on trail_feature.trail_id removes the child rows automatically. -->
+	<delete id="deleteTrailsBySourceFile" parameterType="String">
+		DELETE FROM trail WHERE source_file = #{value}
+	</delete>
+
+	<insert id="insertTrail" parameterType="com.season.semiproject.spatial.TrailInsertParam"
+			useGeneratedKeys="true" keyProperty="id">
+		INSERT INTO trail (course_id, source_file, source_mountain_name, source_course_name)
+		VALUES (#{courseId}, #{sourceFile}, #{sourceMountainName}, #{sourceCourseName})
+	</insert>
+
+	<!-- geometry stored via ST_GeomFromGeoJSON from the original Feature's geometry JSON
+	     fragment, not via a Java GIS object. Verified empirically that ST_GeomFromGeoJSON
+	     already returns SRID 4326 by default for GeoJSON input; ST_SetSRID is added anyway
+	     to make that assumption explicit in the SQL rather than implicit. -->
+	<insert id="insertTrailFeature" parameterType="com.season.semiproject.spatial.TrailFeatureInsertParam">
+		INSERT INTO trail_feature (trail_id, sequence, source_feature_index, geom, dn_value)
+		VALUES (
+			#{trailId},
+			#{sequence},
+			#{sourceFeatureIndex},
+			ST_SetSRID(ST_GeomFromGeoJSON(#{geometryJson}), 4326),
+			#{dnValue}
+		)
+	</insert>
+
+</mapper>

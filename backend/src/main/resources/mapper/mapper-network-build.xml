@@ -1,0 +1,75 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<!--
+  Phase 6 Derived Network Layer builder. Used only by
+  com.season.semiproject.spatial.network.NetworkBuildService, which runs under the
+  `spatial-network-build` Spring profile. Not exposed through any Controller/API.
+
+  Design: this Phase deliberately builds topology using EXACT coordinate equality only (no
+  ST_DWithin/snapping tolerance); see docs/01-architecture-and-modeling.md, Phase 6, for the
+  tolerance experiment that was run for reference but not applied. No genuine mid-line
+  (non-endpoint) intersection was found in the actual data, so no ST_Split is used either.
+-->
+<mapper namespace="mapper-network-build">
+
+	<!-- Rebuild strategy: wipe the whole Derived Network Layer and regenerate it from
+	     trail_feature. Never touches trail/trail_feature (Raw layer). -->
+	<delete id="deleteAllTrailSegments">
+		DELETE FROM trail_segment
+	</delete>
+
+	<delete id="deleteAllTrailNodes">
+		DELETE FROM trail_node
+	</delete>
+
+	<!-- Step 1: decompose every TrailFeature.geom (MultiLineString) into individual LineString
+	     Parts via ST_Dump. This temp table exists only for the lifetime of this transaction
+	     (MyBatis/Spring keep one JDBC connection for the whole @Transactional method, so it is
+	     visible to the later steps below). -->
+	<update id="createLinePartTempTable">
+		CREATE TEMP TABLE tmp_line_part AS
+		SELECT
+			tf.id AS trail_feature_id,
+			tf.trail_id,
+			(ST_Dump(tf.geom)).path[1] AS part_index,
+			(ST_Dump(tf.geom)).geom AS geom
+		FROM trail_feature tf
+	</update>
+
+	<select id="countLineParts" resultType="int">
+		SELECT COUNT(*) FROM tmp_line_part
+	</select>
+
+	<!-- Step 2: one TrailNode per distinct EXACT coordinate among all Part start/end points.
+	     No tolerance, no geometry modification; a node's geometry is always a real Part
+	     endpoint's exact original coordinate. -->
+	<insert id="insertNodesFromParts">
+		INSERT INTO trail_node (geom)
+		SELECT pt FROM (
+			SELECT ST_StartPoint(geom) AS pt FROM tmp_line_part
+			UNION ALL
+			SELECT ST_EndPoint(geom) AS pt FROM tmp_line_part
+		) e
+		GROUP BY pt
+	</insert>
+
+	<select id="countTrailNodes" resultType="int">
+		SELECT COUNT(*) FROM trail_node
+	</select>
+
+	<!-- Step 3: one TrailSegment per Part, resolving its two endpoints to the TrailNode rows
+	     just created (exact geometry match). geom is copied unchanged from the Part; no
+	     splitting, no snapping. -->
+	<insert id="insertSegmentsFromParts">
+		INSERT INTO trail_segment (from_node_id, to_node_id, geom, source_trail_feature_id, source_part_index)
+		SELECT sn.id, en.id, lp.geom, lp.trail_feature_id, lp.part_index
+		FROM tmp_line_part lp
+		JOIN trail_node sn ON sn.geom = ST_StartPoint(lp.geom)
+		JOIN trail_node en ON en.geom = ST_EndPoint(lp.geom)
+	</insert>
+
+	<select id="countTrailSegments" resultType="int">
+		SELECT COUNT(*) FROM trail_segment
+	</select>
+
+</mapper>
