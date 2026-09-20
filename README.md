@@ -49,8 +49,9 @@ Frontend가 직접 fetch → 좌표 flatten → 지도에 렌더링
 | 1 | GeoJSON → PostGIS Raw Spatial Modeling | `Trail`/`TrailFeature`로 검증을 통과한 1,706개 Feature의 출처(`source_feature_index`)·경계·geometry를 보존하고, 제외된 13건은 Manifest로 명시 추적 |
 | 2 | Raw / Network Layer 분리 | `TrailFeature`(Validated Raw)와 `TrailNode`/`TrailSegment`(`ST_Dump` + exact endpoint 매칭으로 파생된 Derived Network baseline)를 별개 계층으로 설계 |
 | 3 | AccidentPoint 독립 Raw Layer + 동적 공간관계 | 사고 42건을 FK 없이 `ST_DWithin`/`ST_Distance`로 TrailSegment와 질의 시점에 연결 |
-| 4 | 기존 기능 보호를 위한 Hybrid Migration | 데이터 정제가 기존 경사 렌더링 로직과 충돌하는 것을 발견하고, 안전한 화면만 DB API로 전환 |
-| 5 | Fresh Rebuild / Regression / Performance 검증 | 별도 DB에서 전체 파이프라인 재현 + 93개 자동 테스트 + 실측 성능 baseline 확보 |
+| 4 | 기존 기능 보호를 위한 Hybrid Migration | 데이터 정제가 기존 경사 렌더링 로직과 충돌하는 것을 발견하고, 안전한 화면만 먼저 DB API로 전환(Phase 9A) — 이후 대체 모델을 검증한 뒤 나머지 4개 화면도 전환(Phase 12D) |
+| 5 | Fresh Rebuild / Regression / Performance 검증 | 별도 DB에서 전체 파이프라인 재현 + 125개 자동 테스트 + 실측 성능 baseline 확보 |
+| 6 | Network 기반 20m 고정거리 SlopeSection 모델 | TrailSegment Network를 branch-free Chain으로 재구성해 DEM-derived DN 값을 선형보간, 좌표 개수 기반 청킹을 client-independent한 거리 기반 경사 분석으로 대체(`docs/09`) |
 
 ---
 
@@ -75,11 +76,12 @@ flowchart TD
     subgraph API["Backend API"]
         GJAPI["GET /api/spatial/trails/geojson"]
         SQAPI["GET /api/spatial/accidents/{id}/nearby-segments<br/>GET /api/spatial/trail-segments/{id}/nearby-accidents"]
+        SSAPI["GET /api/spatial/trails/{trailId}/slope-sections<br/>?windowMeters=20"]
     end
 
     subgraph FE["Frontend"]
         Safe["non-slope 7개 화면<br/>(Preview/Community/Heatmap/People)"]
-        Legacy["Legacy Slope 4개 화면<br/>(processGeoJSON→groupCoordinates→calculateSlope)"]
+        SlopeFE["Slope 4개 화면<br/>(Base Trail Layer + 20m SlopeSection Overlay)"]
     end
 
     TG -- "Validation/Import, 13건 제외" --> TF
@@ -89,13 +91,22 @@ flowchart TD
     TF -- "source_feature_index ASC" --> GJAPI
     AP --- SQAPI
     TNTS --- SQAPI
+    TNTS -- "NetworkChain + ElevationProfile" --> SSAPI
     GJAPI --> Safe
     SQAPI -.-> Safe
-    TG -. "Legacy Compatibility, DB 미경유" .-> Legacy
+    GJAPI -- "Base Trail" --> SlopeFE
+    SSAPI -- "estimatedSlopePercent → color" --> SlopeFE
 ```
 
-**Legacy Compatibility Boundary**: 위 다이어그램에서 `Legacy` 4개 화면은 의도적으로 DB/API를
-거치지 않고 원본 GeoJSON을 직접 읽는다 — 이유는 6번 Design Decision 참고.
+**Legacy Compatibility Boundary는 해소됐다(Phase 12D)**: Phase 9A 당시에는 DB Validated
+Source(1706건)를 그대로 기존 `groupCoordinates` 파이프라인에 대입하면 제외된 13건 때문에
+좌표 스트림이 밀려 렌더링 회귀가 생겼다(6번 Design Decision 참고) — 그래서 4개 슬로프 화면만
+의도적으로 원본 정적 GeoJSON을 계속 읽게 남겨뒀다. 이는 "마이그레이션 미완료"가 아니라 당시
+기준으로 안전한 선택이었다. 이후 Phase 12A-12C에서 좌표 청킹 대신 **TrailSegment Network
+기반 고정거리(20m) SlopeSection**이라는 대체 모델을 설계·검증했고, Phase 12D에서 이 대체
+모델이 실사용에 충분함을 확인한 뒤에야 4개 화면을 Backend API로 전환했다(`docs/09` 참고).
+원본 정적 GeoJSON 파일 자체는 Trail Import source/Legacy regression baseline으로 계속
+보존한다.
 
 현재 Network는 `TrailFeature.geom`을 `ST_Dump`로 분해한 LineString Part의 endpoint가 정확히
 일치하는 지점만 `TrailNode`로 묶는 **exact endpoint matching 기준 baseline**이다. 좌표 오차를
@@ -204,12 +215,15 @@ noding까지 마친 완전한 routing topology는 아니다(10번 Known Limitati
 - **왜 13개 무효 Feature를 API 응답에 다시 섞지 않았는가**: 좌표 1개짜리 degenerate
   LineString처럼 구조적으로 무효한 공간 객체를 "기존 화면 호환"을 이유로 다시 서비스하면 DB
   Source of Truth 원칙이 무너진다.
-- **왜 Legacy Slope 4개 화면만 원본 정적 파일을 유지했는가**: DB Validated Source(1706건)를
-  기존 경사 계산 로직(`groupCoordinates`, 좌표 배열을 고정 크기로 자르는 위치 기반 연산)에 그대로
-  대입해봤더니, 제외된 Feature 때문에 좌표 스트림이 밀리면서 마루 코스 29.6%, 홍제동구간 39.5%
-  (groupSize=5 기준)의 렌더링 그룹 색상이 원본과 달라지는 것을 실측했다. 이를 "미완료 마이그레이션"이
-  아니라 **의도적인 Compatibility Boundary**로 설계했다 — Validated DB Source는 일반 기능에,
-  Original Static Source는 Legacy 경사 렌더링에 쓴다.
+- **(Phase 9A 당시) 왜 Legacy Slope 4개 화면만 원본 정적 파일을 유지했는가**: DB Validated
+  Source(1706건)를 기존 경사 계산 로직(`groupCoordinates`, 좌표 배열을 고정 크기로 자르는 위치
+  기반 연산)에 그대로 대입해봤더니, 제외된 Feature 때문에 좌표 스트림이 밀리면서 마루 코스
+  29.6%, 홍제동구간 39.5%(groupSize=5 기준)의 렌더링 그룹 색상이 원본과 달라지는 것을
+  실측했다. 이를 "미완료 마이그레이션"이 아니라 **의도적인 Compatibility Boundary**로
+  설계했다 — Validated DB Source는 일반 기능에, Original Static Source는 Legacy 경사
+  렌더링에 쓴다. **이 경계는 Phase 12D에서 해소됐다**: 좌표 청킹을 대체할 TrailSegment
+  Network 기반 20m 고정거리 SlopeSection 모델을 설계·검증한 뒤, 4개 화면을 그 모델로
+  전환했다(`docs/09-slope-section-analysis.md`).
 - **왜 geography functional index를 바로 추가하지 않았는가**: `EXPLAIN ANALYZE`로 확인한 결과
   현재 규모(TrailSegment 2122건, AccidentPoint 42건)에서 `ST_DWithin(geom::geography, ...)`가
   Seq Scan으로도 수십 ms 이내였다 — 측정 근거 없는 조기 최적화를 피했다.
@@ -253,18 +267,35 @@ GET /api/spatial/trail-segments/{segmentId}/nearby-accidents?distanceMeters=N
 좌표 중 76%가 Trail Network에서 100m 이상 떨어져 있어, 특정 거리값을 위험/안전 기준으로 주장할
 근거가 없다(`docs/05-accident-spatial-query.md`).
 
+### SlopeSection API — TrailSegment Network 기반 고정거리 경사 분석
+
+```text
+GET /api/spatial/trails/{trailId}/slope-sections?windowMeters=10|20|30
+```
+- Source: `TrailFeature.dn_value`(DEM-derived 대표 elevation으로 알려진 미검증 값) +
+  `TrailSegment` Network를 branch-free Chain으로 재구성 → 고정거리(기본 20m) 구간별 선형
+  보간 경사(`estimatedSlopePercent`)
+- `windowMeters`는 10/20/30만 허용 — 임의 값(특히 1m 같은 짧은 값)은 baseline 노이즈를
+  재현하므로 막았다(`docs/09-slope-section-analysis.md`)
+- 4개 Legacy 경사 화면(`MountainDetailView.vue` 등)이 Phase 12D부터 이 API + Trail GeoJSON
+  API를 Base+Overlay 구조로 함께 사용한다 — Frontend는 더 이상 좌표를 묶어 경사를 직접
+  계산하지 않는다
+- 응답은 GeoJSON FeatureCollection이며 `estimatedElevationSource` 필드로 DN 출처(미검증
+  DEM-derived 값)를 매 응답에 명시한다
+
 ---
 
 ## 8. 검증 결과
 
 | 항목 | 결과 |
 |---|---|
-| Backend 자동 테스트 | **93 / 93 PASS** |
+| Backend 자동 테스트 | **125 / 125 PASS** |
 | Frontend production build | PASS (신규 경고/에러 0건) |
 | Geometry integrity 위반(4개 테이블 전수) | **0건** |
 | Raw ↔ Network geometry parity | **2122 / 2122**, 길이차 **0m** |
 | Fresh Rebuild(별도 DB에서 전체 파이프라인 재구성) | Dataset 4/1706/2526/2122/42 **동일 재현** |
 | Trail GeoJSON API(local, warmup 5회+측정 30회) | 458,796 bytes, **median 8.78ms, p95 10.51ms** |
+| SlopeSection API(20m, 마루/최대부하, warmup 5회+측정 30회) | **median ~60ms, p95 ~63ms**(`docs/09`) |
 
 - 위 API 응답시간은 **local Docker, localhost 환경**에서 측정한 값이며 production latency가
   아니다.
@@ -322,12 +353,16 @@ npm run serve
 - Trail Network는 exact endpoint topology baseline이며 snapping/tolerance를 적용하지 않았다
   (마루 코스가 391개 connected component로 분절되어 있음)
 - 원본 1719 Feature 중 13건(공백 PMNTN_NM 4건 + geometry 무효 9건)을 Raw Layer에서 제외했다
-- `DN`의 물리적 의미(실제 고도인지)는 검증되지 않았다 — Legacy slope는 실제 경사율이라고
-  주장하지 않는다
+- `DN`의 물리적 의미(실제 고도인지)는 검증되지 않았다 — `estimatedSlopePercent`는 measured가
+  아니라 DEM-derived로 알려진 값 기반 estimated slope다
 - AccidentPoint 원본 좌표의 위치 정밀도(GPS 실측 vs 신고 시스템 근사값)는 검증되지 않았고,
   42건 중 76%가 Trail Network에서 100m 이상 떨어져 있다
 - 사고 지도 마커용 15건 데이터셋은 Raw Source가 아니라 Frontend 표시 전용 가공 데이터다
-- Legacy Slope 4개 화면은 의도적으로 Original Static GeoJSON을 계속 사용한다(Phase 9B 보류)
+- SlopeSection(20m) 커버리지는 100%가 아니다 — 전체 Network 길이 기준 73.0%, elevation
+  sample이 정의된 범위 기준 90.0%(마루만 각각 66.5%/86.6%로 낮음, fragmentation이 원인) —
+  미커버 구간은 Base Trail만 표시되고 slope=0으로 임의 채우지 않는다(`docs/09`)
+- SlopeSection의 부호(상승/하강)는 chain별로 독립적으로 정규화된 임의 기준(더 작은 node id가
+  시작)이라, 실제 등반 방향과 항상 일치한다는 보장은 없다(`docs/09` §40)
 - 실제 browser DOM/육안 확인은 수행하지 않았다(Node 로직 실행 확인으로 대체)
 ```
 
@@ -345,6 +380,7 @@ npm run serve
 | [`docs/06-frontend-api-compatibility.md`](docs/06-frontend-api-compatibility.md) | Trail GeoJSON API 계약, Hybrid Migration 결정, Frontend 전환 결과 |
 | [`docs/07-testing-and-performance.md`](docs/07-testing-and-performance.md) | Fresh Rebuild 재현성, 성능 baseline, EXPLAIN 실행계획 |
 | [`docs/08-portfolio-summary.md`](docs/08-portfolio-summary.md) | 면접/이력서용 기술 요약, 예상 설계 질문 답변 |
+| [`docs/09-slope-section-analysis.md`](docs/09-slope-section-analysis.md) | Network 기반 20m SlopeSection 모델 설계/검증과 4개 Legacy 화면 전환(Phase 12A-12D) |
 
 ---
 

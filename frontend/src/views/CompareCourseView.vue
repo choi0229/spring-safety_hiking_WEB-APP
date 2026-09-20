@@ -149,6 +149,13 @@ import MobileHeaderView from "@/components/MobileHeaderView.vue";
 import { ref, onMounted} from "vue";
 import { useRouter } from 'vue-router';
 import { getCourseById } from "@/api/complaint";
+import {
+  resolveTrailId,
+  SLOPE_WINDOW_METERS,
+  getEstimatedSlopeColor,
+  fetchTrailGeoJson,
+  fetchSlopeSections,
+} from '@/api/slopeSection.js';
 //import { set } from "core-js/core/dict";
 
 const router = useRouter();
@@ -288,7 +295,7 @@ async function createMap() {
     center: new kakao.maps.LatLng(37.66433293993584, 127.01160029114365),
     level: 5,
   });
-  await loadGeoJSONFromServer('/data/인왕산ele copy.geojson');
+  await loadGeoJSONFromServer();
   await loadMarkers("/data/헬기장spot.geojson", '/images/helipad.png');
   await loadMarkers("/data/화장실.geojson", '/images/toilets.png');
   await loadMarkers("/data/2023산악사고_인왕산2.geojson", '/images/danger.png');
@@ -296,18 +303,17 @@ async function createMap() {
   
 }
 
-// GeoJSON 데이터 로드 함수
-async function loadGeoJSONFromServer(url, targetMap = map.value) {
+// Trail GeoJSON API 데이터 로드 함수 (Phase 12D -- Validated DB TrailFeature 기반, 기존 static
+// '/data/인왕산ele copy.geojson' 직접 fetch를 대체. 해당 static 파일 자체는 원본 provenance/
+// Legacy regression 용도로 계속 보존한다 -- docs/09-slope-section-analysis.md 참고.)
+async function loadGeoJSONFromServer(targetMap = map.value) {
 try {
-  const response = await fetch(url);
-  if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
-  
-  const geojsonData = await response.json();
-  console.log('GeoJSON data loaded:', geojsonData);  // GeoJSON 데이터를 콘솔에 출력해 확인
+  const geojsonData = await fetchTrailGeoJson();
+  console.log('Trail GeoJSON data loaded:', geojsonData);
   processGeoJSON(geojsonData, targetMap);  // GeoJSON 데이터를 처리하여 경로를 그리는 함수 호출
   addCustomOverlay();
 } catch (error) {
-  console.error('GeoJSON 파일 로드 중 에러 발생:', error);
+  console.error('Trail GeoJSON API 로드 중 에러 발생:', error);
 }
 }
 
@@ -450,11 +456,11 @@ function processGeoJSON(geojsonData, targetMap) {
       });
   });
 
-  // 좌표 그룹화 및 지도에 경로 추가
+  // 지도에 Base 경로 추가 (경사 색상은 renderSlopeOverlay가 코스별로 별도로 그린다)
   routeCoordinates.value.forEach((courseRoute) => {
       if (courseRoute.coordinates.length > 0) {
-          const groupedCoordinates = groupCoordinates(courseRoute.coordinates, 5); // 5개씩 그룹화
-          addRouteLayer(groupedCoordinates, targetMap, courseRoute.courseName);
+          addRouteLayer(courseRoute.coordinates, targetMap);
+          renderSlopeOverlay(courseRoute.courseName, targetMap); // Phase 12D: 20m SlopeSection Overlay
       }
   });
 
@@ -464,51 +470,58 @@ function processGeoJSON(geojsonData, targetMap) {
   console.log("좌표나눈거"+JSON.stringify(routeCoordinates));
 }
 
-// 좌표 그룹화 함수
-function groupCoordinates(coordinates, groupSize) {
-const groups = [];
-for (let i = 0; i < coordinates.length; i += groupSize) {
-  groups.push(coordinates.slice(i, i + groupSize));
-}
-return groups;
-}
-
 let allCoordinates = [];
 
-// 경로 레이어 추가 함수
-function addRouteLayer(groupedCoordinates, targetMap) {
-  // 중첩 배열을 평평하게 만든 flatCoordinates 생성
-  const flatCoordinates = groupedCoordinates.flat();
+// 경로(Base Trail) 레이어 추가 함수 -- Phase 12D부터 경사 색상은 이 함수가 아니라
+// renderSlopeOverlay()가 코스별로 별도 Overlay로 그린다 (Base + Overlay 구조, docs/09 참고).
+function addRouteLayer(coordinates, targetMap) {
+  allCoordinates.push(...coordinates);
+  drawBaseRoute(coordinates); // 기본 경로 그리기
+  setMapBoundsToAllCourse(targetMap);
+}
 
-  allCoordinates.push(...flatCoordinates);
+// Phase 12D: 20m SlopeSection Backend API 기반 경사 Overlay. 이 화면은 여러 코스를 동시에
+// 비교하므로 코스별로 독립적으로 호출/렌더링된다 -- 코스별 Overlay가 서로 섞이지 않도록
+// slopeOverlayPolylinesByCourse에 course 이름별로 분리해서 추적하고, course 재렌더링 시
+// 그 코스의 이전 Overlay만 제거한다.
+const slopeOverlayPolylinesByCourse = {};
 
-  drawBaseRoute(flatCoordinates); // 기본 경로 그리기
+async function renderSlopeOverlay(courseName, targetMap) {
+  if (slopeOverlayPolylinesByCourse[courseName]) {
+    slopeOverlayPolylinesByCourse[courseName].forEach((polyline) => polyline.setMap(null));
+  }
+  slopeOverlayPolylinesByCourse[courseName] = [];
 
-  groupedCoordinates.forEach((group) => {
-    if (group.length > 1) {
-      const startPoint = group[0];
-      const endPoint = group[group.length - 1];
-      const slope = calculateSlope(startPoint, endPoint);
+  const trailId = resolveTrailId(courseName);
+  if (!trailId) {
+    console.error('SlopeSection Trail ID를 찾을 수 없는 코스명입니다:', courseName);
+    return;
+  }
 
-      // 경사도에 따라 색상을 설정하되, 코스별로 다른 색상 스타일을 적용
-      const color = getColorBySlope(slope);  // 경사도와 코스 이름에 따른 색상 설정
-
-      // 각 그룹에 대한 경로 생성
-      const groupLinePath = group.map(coord => new kakao.maps.LatLng(coord.lat, coord.lng));
-
+  try {
+    const slopeGeoJson = await fetchSlopeSections(trailId, SLOPE_WINDOW_METERS);
+    slopeGeoJson.features.forEach((feature) => {
+      const color = getEstimatedSlopeColor(feature.properties.estimatedSlopePercent);
+      if (color == null) {
+        // invalid/missing slope (not the same thing as a measured ~0% slope) -- skip this
+        // Overlay Feature entirely; the Base Trail Layer already shows this geometry.
+        return;
+      }
+      const path = feature.geometry.coordinates.map(([lng, lat]) => new kakao.maps.LatLng(lat, lng));
       const polyline = new kakao.maps.Polyline({
-        path: groupLinePath,
+        path,
         strokeWeight: 5,
         strokeColor: color,
         strokeOpacity: 0.8,
-        strokeStyle: 'solid'
+        strokeStyle: 'solid',
       });
-
-      polyline.setMap(map.value); // 경로를 map에 그리기
-    }
-  });
-
-  setMapBoundsToAllCourse(targetMap);
+      polyline.setMap(targetMap);
+      slopeOverlayPolylinesByCourse[courseName].push(polyline);
+    });
+  } catch (error) {
+    // SlopeSection API 실패는 해당 코스의 경사 Overlay만 생략시킨다 -- Base Trail은 유지된다.
+    console.error(`SlopeSection API 로드 중 에러 발생 (${courseName}, Base Trail은 계속 표시됩니다):`, error);
+  }
 }
 
 function setMapBoundsToAllCourse(targetMap) {
@@ -537,58 +550,10 @@ const basePolyline = new kakao.maps.Polyline({
 basePolyline.setMap(map.value);
 }
 
-function calculateHaversineDistance(coord1, coord2) {
-const R = 6371e3; // 지구 반지름 (미터 단위)
-const lat1 = deg2rad(coord1.lat);
-const lat2 = deg2rad(coord2.lat);
-const deltaLat = deg2rad(coord2.lat - coord1.lat);
-const deltaLon = deg2rad(coord2.lng - coord1.lng);
-
-const a =
-  Math.sin(deltaLat / 2) * Math.sin(deltaLat / 2) +
-  Math.cos(lat1) * Math.cos(lat2) *
-  Math.sin(deltaLon / 2) * Math.sin(deltaLon / 2);
-
-const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-
-// 두 지점 간의 거리 반환 (미터 단위)
-return R * c;
-}
-
-function calculateSlope(start, end) {
-// 하버사인 공식을 사용하여 두 지점 간의 수평 거리 (지구 곡률 반영)
-const horizontalDistance = calculateHaversineDistance(
-  { lat: start.lat, lng: start.lng },
-  { lat: end.lat, lng: end.lng }
-);
-
-// 고도 차이 계산
-const elevationChange = end.elevation - start.elevation;
-
-// 피타고라스 정리를 사용해 두 지점 간의 대각선 거리 계산
-const diagonalDistance = Math.sqrt(
-  Math.pow(horizontalDistance, 2) + Math.pow(elevationChange, 2)
-);
-
-// 수평 거리가 너무 짧으면 경사도 계산을 무시하고 기본 경사도 0으로 설정
-if (horizontalDistance < 1) { // 예시: 수평 거리가 10m 미만일 경우
-  return 0; // 경사도 0으로 간주
-}
-
-// 경사도 = 고도 차이 / 대각선 거리 * 100
-return (elevationChange / diagonalDistance) * 100;
-}
-
-function deg2rad(deg) {
-return deg * (Math.PI / 180);
-}
-
-// 경사도에 따른 색상 결정 함수
-function getColorBySlope(slope) {
-if (slope > 30) return '#FF4500'; // 급경사 (빨강)
-if (slope < -15) return '#1E90FF'; // 급한 내리막 (파랑)
-return '#32CD32'; // 평지에 가까움 (초록)
-}
+// Phase 12D: 경사(slope) 계산은 더 이상 Frontend 책임이 아니다 -- 기존
+// calculateHaversineDistance()/calculateSlope()/deg2rad()/getColorBySlope()는 제거했다.
+// 색상 매핑은 src/api/slopeSection.js의 getEstimatedSlopeColor()가, 경사 계산 자체는
+// Backend SlopeSectionService가 담당한다 (docs/09-slope-section-analysis.md).
 
 // 마커 추가
 async function loadMarkers(url, imageSrc) {

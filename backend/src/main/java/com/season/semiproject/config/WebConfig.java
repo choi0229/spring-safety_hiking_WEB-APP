@@ -17,7 +17,7 @@ public class WebConfig implements WebMvcConfigurer {
     @Override
     public void addCorsMappings(CorsRegistry registry) {
         registry.addMapping("/api/**") // API 엔드포인트에 대해 CORS 허용
-                .allowedOrigins("http://172.30.1.53:8080") // Vue.js 애플리케이션의 URL
+                .allowedOrigins("http://172.30.1.53:8080", "http://localhost:8080") // Vue.js 애플리케이션의 URL(LAN 호스트 실행 + 기본 localhost 실행)
                 .allowedMethods("POST", "GET", "PUT", "DELETE") // 허용할 HTTP 메서드
                 .allowCredentials(true)
         		.allowedHeaders("*")

@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<!--
+  Phase 12B Network-based fixed-distance SlopeSection model. Used by
+  com.season.semiproject.spatial.slope.SlopeSectionDAO, exposed through SlopeSectionController
+  (/api/spatial/trails/{trailId}/slope-sections). See docs/09-slope-section-analysis.md.
+
+  Compute-on-request only: no slope_section table exists, and this file never writes to
+  trail_segment/trail_node/trail_feature.
+-->
+<mapper namespace="mapper-slope-section">
+
+	<select id="countTrailById" parameterType="long" resultType="int">
+		SELECT COUNT(*) FROM trail WHERE id = #{value}
+	</select>
+
+	<!-- One query per Trail: every TrailSegment plus its parent TrailFeature's DN and the
+	     Segment's own geometry (from_node -> to_node coordinate order), so the whole chain graph
+	     for a Trail is built in Java from a single result set (no N+1). -->
+	<select id="findSegmentsForTrail" parameterType="long" resultType="com.season.semiproject.spatial.slope.TrailSegmentElevationRow">
+		SELECT
+			ts.id AS segmentId,
+			ts.from_node_id AS fromNodeId,
+			ts.to_node_id AS toNodeId,
+			ST_Length(ts.geom::geography) AS lengthMeters,
+			ts.source_trail_feature_id AS sourceTrailFeatureId,
+			tf.dn_value AS sourceDn,
+			ST_AsGeoJSON(ts.geom, 9) AS geometryGeoJson
+		FROM trail_segment ts
+		JOIN trail_feature tf ON tf.id = ts.source_trail_feature_id
+		WHERE tf.trail_id = #{value}
+	</select>
+
+	<!-- Batched geometry cut: every SlopeSection window of the whole Trail is cut from its
+	     Chain's WKT in one query via ST_LineSubstring (fraction-based), never one query per
+	     Section. The Chain WKT is intentionally re-sent per window row (not de-duplicated
+	     server-side) so this stays a single flat query regardless of Chain count. -->
+	<select id="cutSections" resultType="com.season.semiproject.spatial.slope.SectionCutResultRow">
+		SELECT v.idx AS idx,
+			ST_AsGeoJSON(ST_LineSubstring(ST_GeomFromText(v.wkt, 4326), v.startFrac, v.endFrac), 9) AS geometryGeoJson
+		FROM (VALUES
+			<foreach item="w" collection="windows" separator=",">
+				(#{w.idx}, #{w.wkt}::text, #{w.startFraction}::double precision, #{w.endFraction}::double precision)
+			</foreach>
+		) AS v(idx, wkt, startFrac, endFrac)
+	</select>
+
+</mapper>

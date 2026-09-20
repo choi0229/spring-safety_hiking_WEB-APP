@@ -119,7 +119,13 @@ API Feature(TrailFeature) = 1706
 있으나, 전체 코스 길이에 비해 작은 수준이라는 것이 정확한 표현이다. 9번 최종 검증 단계에서 실제
 API 응답(1706 Feature)을 각 화면의 실제 소비 로직에 직접 흘려 넣어 정상 처리됨을 확인했다.
 
-## 5. Legacy Slope Compatibility — 왜 4개 화면은 전환하지 않았는가
+## 5. Legacy Slope Compatibility — 왜 4개 화면은 전환하지 않았는가 (Phase 9A 시점 기록)
+
+> **Phase 12D 갱신**: 아래 분석은 Phase 9A 당시("이 시점에는 전환하지 않는다") 판단 근거를
+> 그대로 보존한 기록이다. 이후 Phase 12A-12C에서 `groupCoordinates` 좌표 청킹 자체를 대체할
+> TrailSegment Network 기반 20m 고정거리 SlopeSection 모델을 설계·검증했고, Phase 12D에서
+> 4개 화면 모두 그 모델로 전환했다 — 현재 상태는 `docs/09-slope-section-analysis.md` 참고.
+> 아래 수치/서술은 "왜 당시에는 전환하지 않는 것이 맞았는가"를 설명하는 역사적 근거로만 읽는다.
 
 `MountainDetailView.vue`, `CompareCourseView.vue`, `MountainDetailView2.vue`,
 `MobileMountainDetailView.vue`는 `processGeoJSON()` → `groupCoordinates(N)` → `calculateSlope()`

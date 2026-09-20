@@ -72,13 +72,24 @@ TrailSegment는 `spatial-network-build` 프로필로 언제든 재생성 가능�
 코스 라벨(PMNTN_NM)이 공백이었다. Frontend 호환성을 이유로 이런 데이터를 DB API에 다시
 포함시키면 "DB가 Source of Truth"라는 원칙이 무너지고, 검증 로직이 있으나 마나 한 것이 된다.
 
-### Q6. 왜 Legacy slope 화면만 Original Source를 유지했는가?
+### Q6. (Phase 9A 당시) 왜 Legacy slope 화면만 Original Source를 유지했는가?
 DB Validated Source(1706건)를 기존 `groupCoordinates` 파이프라인에 그대로 대입해 독립적으로
 재현한 결과, 제외된 13건 때문에 좌표 스트림이 밀리면서(위치 기반 고정크기 청킹의 특성상 중간
 좌표가 빠지면 그 이후 전부 밀림) 마루 코스 29.6%, 홍제동구간 39.5%(groupSize=5 기준)의 렌더링
 그룹 색상이 원본과 달라짐을 실측했다. 이를 해결하려고 무효 Feature를 되살리는 대신, Validated
 DB Source(일반 기능)와 Original Static Source(Legacy 경사 렌더링)의 경계를 의도적으로
-분리했다 — "마이그레이션 미완료"가 아니라 설계 결정이다.
+분리했다 — "마이그레이션 미완료"가 아니라 설계 결정이다. **이 경계는 Phase 12D에서 해소됐다**:
+좌표 청킹 자체를 TrailSegment Network 기반 20m 고정거리 SlopeSection으로 대체하는 모델을
+설계·검증(Phase 12A-12C)한 뒤 4개 화면 모두 전환했다 — Q9 참고.
+
+### Q9. 왜 SlopeSection을 TrailSegment가 아니라 별도 분석 단위로 정의했는가?
+TrailSegment 중앙값 길이가 약 3m라 두 지점 사이 거리로 slope를 나누면 분모가 작아 극단값이
+쉽게 발생한다(Feature-to-Feature 프로토타입에서 실측: baseline 5m 미만 구간에서만 `|slope| >
+100%`가 나타남). 또한 1706개 Feature 중 256개가 2개 이상 TrailSegment로 쪼개져 있어, Segment
+단위로 DN을 다루면 형제 Segment가 부모 DN을 그대로 복사한 것을 "실측된 평탄함"으로 오인하게
+된다. 그래서 TrailSegment/TrailNode Network를 branch-free Chain으로 재구성한 뒤, 그 위에서
+고정 거리(10/20/30m 비교 후 20m 채택) 단위로 SlopeSection을 파생했다 — TrailSegment는 Network
+topology/geometry 단위로, SlopeSection은 경사 분석 전용 단위로 계속 분리해 둔다.
 
 ### Q7. 왜 DN을 실제 고도라고 주장하지 않는가?
 DN 최댓값(655)이 인왕산 실제 정상고도(약 338m)를 초과하고, Frontend의 3D 뷰는 DN이 아닌 별도
@@ -100,9 +111,11 @@ AccidentPoint Import            — 42건 Raw Import, 15건 Legacy display 데�
 Spatial Query API               — ST_DWithin/ST_Distance 기반, FK 없는 동적 관계
 Trail GeoJSON API               — 단일 SQL(json_build_object+json_agg), source_feature_index
                                     정렬, ST_AsGeoJSON(geom,15), N+1 없음
-Hybrid Frontend Migration       — 실사용 7개 화면만 fetch URL 교체, 미라우팅 4개 파일 변경 원복,
-                                    Legacy 4개 화면 무변경
+Hybrid Frontend Migration       — 실사용 7개 화면 먼저 fetch URL 교체(Phase 9A), 미라우팅
+                                    4개 파일 변경 원복, Legacy 4개 화면은 대체 모델 검증 후 전환(Phase 12D)
 Fresh Rebuild 검증              — 별도 DB에서 전체 파이프라인 재구성, Dataset/API 동일 재현
+SlopeSection API(Phase 12B-12D) — NetworkChain 재구성 + Feature 단위 DN sample 선형보간,
+                                    Segment 단위 geometry cut(오차 median 0.18%), 4개 화면 전환
 ```
 
 ## 6. 정량 검증
@@ -114,12 +127,18 @@ AccidentPoint: 42
 Raw Part(ST_Dump) ↔ TrailSegment geometry parity = 2122 / 2122
 Raw ↔ Network 전체 길이 차이 = 0.000000 m
 
-Backend 자동 테스트 = 93 / 93 PASS
+Backend 자동 테스트 = 125 / 125 PASS
 Frontend production build = PASS
 
 Trail GeoJSON API (local Docker, warmup 5회 + 측정 30회)
   payload = 458,796 bytes
   median = 8.78ms, p95 = 10.51ms
+
+SlopeSection API 20m (전체 4개 Trail 합산)
+  section 351건(full 290 + partial 61), |slope|>100% 0건
+  network length coverage = 73.0%, elevation-sample coverage 기준 = 90.0%
+  geometry 절단 오차(Segment 단위 절단 적용 후) relError median = 0.18%, p95 = 1.58%
+  API 응답시간(마루, 최대부하 케이스) median ~60ms, p95 ~63ms
 
 Fresh Rebuild(별도 DB safety_hiking_bench)
   Dataset 4/1706/2526/2122/42 동일 재현, API 1706 Feature 확인
@@ -134,12 +153,17 @@ Fresh Rebuild(별도 DB safety_hiking_bench)
 - Network는 exact endpoint topology baseline(snapping 미적용) — 마루 코스가 391개 connected
   component로 분절되어 있음
 - 원본 1719 Feature 중 13건 제외(PMNTN_NM 공백 4 + geometry 무효 9)
-- DN의 물리적 의미(고도 여부) 미검증
+- DN의 물리적 의미(고도 여부) 미검증 — `estimatedSlopePercent`는 measured가 아니라
+  DEM-derived로 알려진 값 기반 estimated slope
 - Legacy slope 값은 실제 물리적 slope_percent가 아님(diagonal-distance 기반 legacy 공식,
-  JS↔Java parity만 검증)
+  JS↔Java parity만 검증) — `LegacySlopeService`는 regression/provenance 목적으로 계속 유지
 - AccidentPoint 42건의 좌표 정밀도 미검증, 76%가 Trail Network에서 100m 이상 이격
 - 15건 accident display dataset은 Raw Source가 아니라 Legacy UI 표시 전용 데이터
-- Legacy slope 4개 화면은 Compatibility를 위해 Original Static Source를 계속 사용(Phase 9B 보류)
+- SlopeSection(20m) coverage는 100%가 아니다(전체 Network 73.0% / elevation coverage 기준
+  90.0%, 마루만 66.5%/86.6%로 낮음) — 미커버 구간은 Base Trail만 표시하고 slope를 임의로
+  채우지 않는다
+- SlopeSection의 상승/하강 부호는 chain별 임의 정규화 기준이라 실제 등반 방향과 항상 일치한다는
+  보장은 없다
 - 실제 browser DOM/육안 확인 미수행(Node 로직 실행 확인으로 대체)
 - geometry GiST가 geography cast 질의에 자동으로 쓰이지 않음을 확인했으나, 현재 규모에서
   functional geography index는 추가하지 않음(Future Optimization Candidate)
@@ -158,4 +182,6 @@ Fresh Rebuild(별도 DB safety_hiking_bench)
 7. Fresh Rebuild 검증을 어떤 방식으로, 운영 DB에 영향 없이 수행했는지 설명할 수 있는가?
 8. DN을 "고도"라고 말하지 않는 이유와, 그럼에도 왜 완전히 반증됐다고도 말하지 않는지 설명할
    수 있는가?
+9. Phase 12A에서 "chain 개수 기준 24.5% coverage"라는 지표가 왜 오해를 낳는지, 실제 길이 기준
+   coverage로 다시 측정한 이유를 설명할 수 있는가?
 ```

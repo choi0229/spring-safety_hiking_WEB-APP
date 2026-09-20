@@ -155,11 +155,17 @@ com.season.semiproject.spatial.legacy
 `SpatialImportRunner`가 이미 같은 상대 경로 관례를 사용 중). Controller/API는 만들지 않았다.
 
 **갱신(Phase 9A 결과 반영)**: 이 문서를 처음 쓴 시점에는 "Phase 9에서 재사용"을 열어뒀지만,
-실제 Phase 9A는 이 Service를 API로 노출하지 않았다 — Frontend가 여전히 자체
+실제 Phase 9A는 이 Service를 API로 노출하지 않았다 — (Phase 9A 시점) Frontend가 여전히 자체
 `processGeoJSON`/`groupCoordinates`/`calculateSlope`를 직접 수행하고, Backend는 별도의
 `TrailGeoJsonService`(Validated `TrailFeature` 기반, `docs/06-frontend-api-compatibility.md`
-참고)로 non-slope 화면만 지원한다. `LegacySlopeService`는 여전히 Phase 7A 회귀 검증
-전용이며, Legacy Slope 4개 화면과는 아무 코드 경로도 공유하지 않는다.
+참고)로 non-slope 화면만 지원했다. `LegacySlopeService`는 지금도 API로 노출하지 않는다 —
+Legacy Slope 4개 화면과 코드 경로를 공유하지 않는 것은 여전히 사실이지만, 그 이유가 바뀌었다.
+
+**갱신(Phase 12D 결과 반영)**: Phase 12D에서 4개 화면의 `groupCoordinates`/`calculateSlope`를
+제거하고 `docs/09-slope-section-analysis.md`의 20m SlopeSection API로 전환했다.
+`LegacySlopeService`는 이제 "Frontend가 아직 자체 계산 중이라 대체재가 없어서"가 아니라
+**"Phase 7A 당시 Legacy 동작을 재현했다는 회귀/provenance 증거로 의도적으로 보존"**하는
+것이다 — 삭제하지 않았고, 이번 Phase에서도 삭제 계획이 없다.
 
 DB Schema는 변경하지 않았다 — `trail`/`trail_feature`/`trail_node`/`trail_segment` 중 어디에도
 경사 관련 컬럼을 추가하지 않았고, 별도 테이블도 만들지 않았다. Phase 7A의 산출물은 순수 계산
