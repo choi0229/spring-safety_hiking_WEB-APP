@@ -47,9 +47,12 @@ class TrailGeoJsonServiceTest {
             assertEquals("MultiLineString", feature.get("geometry").get("type").asText());
             assertTrue(feature.get("properties").has("PMNTN_NM"));
             assertTrue(feature.get("properties").has("DN"));
-            // Production contract does not expose source_feature_index/sequence/trail_id --
-            // only the fields the legacy static file's consumers actually read (see
+            // trailId (t.id) was added so the Frontend can resolve the current database's Trail
+            // id for a course instead of hardcoding one (see docs/09-slope-section-analysis.md,
+            // "trail.id is a surrogate PK"). source_feature_index/sequence remain unexposed --
+            // only fields an actual consumer reads belong here (see
             // docs/06-frontend-api-compatibility.md, "response property design").
+            assertTrue(feature.get("properties").has("trailId"));
             assertFalse(feature.get("properties").has("source_feature_index"));
             assertFalse(feature.get("properties").has("sequence"));
         }
@@ -66,6 +69,28 @@ class TrailGeoJsonServiceTest {
         }
 
         assertEquals(Map.of("마루", 1267, "무악동구간", 216, "홍제동구간", 108, "부암동구간", 115), counts);
+    }
+
+    @Test
+    void eachCourseNameMapsToExactlyOneTrailId() throws Exception {
+        // The Frontend resolver (frontend/src/api/slopeSection.js, resolveTrailId) trusts that a
+        // course name identifies exactly one trailId and throws otherwise -- this pins down that
+        // assumption against the real data so a future import that breaks it fails loudly here
+        // instead of as a silent Frontend error.
+        JsonNode root = mapper.readTree(service.getTrailFeatureCollectionJson());
+
+        Map<String, java.util.Set<Integer>> trailIdsByCourse = new java.util.HashMap<>();
+        for (JsonNode feature : root.get("features")) {
+            String course = feature.get("properties").get("PMNTN_NM").asText();
+            int trailId = feature.get("properties").get("trailId").asInt();
+            trailIdsByCourse.computeIfAbsent(course, k -> new java.util.HashSet<>()).add(trailId);
+        }
+
+        assertEquals(4, trailIdsByCourse.size());
+        for (Map.Entry<String, java.util.Set<Integer>> entry : trailIdsByCourse.entrySet()) {
+            assertEquals(1, entry.getValue().size(),
+                    "course " + entry.getKey() + " maps to multiple trailId values: " + entry.getValue());
+        }
     }
 
     @Test

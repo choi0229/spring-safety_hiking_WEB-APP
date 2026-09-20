@@ -1,7 +1,5 @@
 package com.season.semiproject.spatial.slope;
 
-import com.season.semiproject.spatial.legacy.LegacyCoordinate;
-import com.season.semiproject.spatial.legacy.LegacySlopeCalculator;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -14,12 +12,12 @@ import java.util.Map;
 import static org.junit.jupiter.api.Assertions.*;
 
 /**
- * Phase 12C: length-based coverage measurement and geometry-distance-error measurement, run
- * against the real Docker PostgreSQL/PostGIS data. Chain COUNT alone (e.g. "99 of 404 chains
- * reachable at 20m", Phase 12A/12B) understates coverage for a network with many very short
- * fragments (see docs/09-slope-section-analysis.md) -- this test measures actual network LENGTH
- * coverage instead, and separately measures how far each SlopeSection's returned geometry length
- * is from its declared {@code distanceMeters}.
+ * Phase 12C: length-based coverage measurement, run against the real Docker PostgreSQL/PostGIS
+ * data. Chain COUNT alone (e.g. "99 of 404 chains reachable at 20m", Phase 12A/12B) understates
+ * coverage for a network with many very short fragments (see docs/09-slope-section-analysis.md)
+ * -- this test measures actual network LENGTH coverage instead. Geometry-distance-error
+ * measurement moved to SlopeSectionBuildServiceIntegrationTest after SlopeSection became a
+ * persisted, window=20-only Derived Analysis Layer (see that class for why).
  *
  * Read-only; asserts nothing destructive. Numbers are also printed so they can be copied into
  * docs/09.
@@ -34,9 +32,6 @@ class SlopeCoverageAnalysisTest {
 
     @Autowired
     private SlopeSectionDAO dao;
-
-    @Autowired
-    private SlopeSectionService service;
 
     @Test
     void measureLengthCoverageAndGeometryErrorForAllTrailsAndWindows() {
@@ -122,31 +117,13 @@ class SlopeCoverageAnalysisTest {
                     100.0 * grandSectionCoverage / grandElevationCoverage, grandRemainderDropped);
         }
 
-        // ---- Geometry distance error: declared distanceMeters vs actual haversine length of
-        // the returned section geometry ----
-        System.out.println("\n=== Phase 12C: Geometry distance error (declared vs actual haversine length) ===");
-        for (int window : WINDOWS) {
-            List<Double> absErrorsFull = new ArrayList<>();
-            List<Double> relErrorsFull = new ArrayList<>();
-            List<Double> absErrorsPartial = new ArrayList<>();
-            for (long trailId : TRAIL_IDS) {
-                SlopeSectionFeatureCollection result = service.computeSlopeSections(trailId, window);
-                for (SlopeSectionFeature feature : result.getFeatures()) {
-                    double actualLength = haversineLengthOf(feature);
-                    double declared = feature.getProperties().getDistanceMeters();
-                    double absError = Math.abs(actualLength - declared);
-                    boolean partial = "PARTIAL_SECTION".equals(feature.getProperties().getDataQualityFlag());
-                    if (partial) {
-                        absErrorsPartial.add(absError);
-                    } else {
-                        absErrorsFull.add(absError);
-                        relErrorsFull.add(absError / declared * 100.0);
-                    }
-                }
-            }
-            printErrorStats(window, "full", absErrorsFull, relErrorsFull);
-            printErrorStats(window, "partial (abs error only)", absErrorsPartial, null);
-        }
+        // Geometry distance error (declared distanceMeters vs actual haversine length) was
+        // measured here across windows 10/20/30 via the old compute-on-request
+        // SlopeSectionService.computeSlopeSections(trailId, window). That method no longer
+        // exists in that form -- SlopeSectionService is now a persisted-data Query service that
+        // only ever serves window=20 (see docs/09-slope-section-analysis.md, "precompute +
+        // persistence"). The equivalent check for the one window Production actually serves now
+        // lives in SlopeSectionBuildServiceIntegrationTest#persistedGeometryLengthCloselyMatchesDeclaredDistance.
 
         printUncoveredCauseBreakdown(chainsByTrail, 20);
         printRepresentativeSectionTraces(chainsByTrail, 20);
@@ -316,44 +293,4 @@ class SlopeCoverageAnalysisTest {
         }
     }
 
-    private double haversineLengthOf(SlopeSectionFeature feature) {
-        List<double[]> coords = GeoJsonLineStringParser.parseLineString(feature.getGeometry().toString());
-        double total = 0;
-        for (int i = 0; i < coords.size() - 1; i++) {
-            LegacyCoordinate a = new LegacyCoordinate(coords.get(i)[0], coords.get(i)[1], 0);
-            LegacyCoordinate b = new LegacyCoordinate(coords.get(i + 1)[0], coords.get(i + 1)[1], 0);
-            total += LegacySlopeCalculator.haversineMeters(a, b);
-        }
-        return total;
-    }
-
-    private void printErrorStats(int window, String label, List<Double> absErrors, List<Double> relErrors) {
-        if (absErrors.isEmpty()) {
-            System.out.printf("window=%dm %-25s n=0%n", window, label);
-            return;
-        }
-        List<Double> sortedAbs = new ArrayList<>(absErrors);
-        sortedAbs.sort(Double::compareTo);
-        int n = sortedAbs.size();
-        double min = sortedAbs.get(0);
-        double median = sortedAbs.get(n / 2);
-        double avg = sortedAbs.stream().mapToDouble(Double::doubleValue).average().orElse(0);
-        double p90 = sortedAbs.get((int) Math.min(n - 1, Math.floor(n * 0.9)));
-        double p95 = sortedAbs.get((int) Math.min(n - 1, Math.floor(n * 0.95)));
-        double max = sortedAbs.get(n - 1);
-        System.out.printf("window=%dm %-25s n=%d absError[min=%.4f median=%.4f avg=%.4f p90=%.4f p95=%.4f max=%.4f]m%n",
-                window, label, n, min, median, avg, p90, p95, max);
-
-        if (relErrors != null && !relErrors.isEmpty()) {
-            List<Double> sortedRel = new ArrayList<>(relErrors);
-            sortedRel.sort(Double::compareTo);
-            int rn = sortedRel.size();
-            double rmedian = sortedRel.get(rn / 2);
-            double rp90 = sortedRel.get((int) Math.min(rn - 1, Math.floor(rn * 0.9)));
-            double rp95 = sortedRel.get((int) Math.min(rn - 1, Math.floor(rn * 0.95)));
-            double rmax = sortedRel.get(rn - 1);
-            System.out.printf("window=%dm %-25s relError%%[median=%.3f p90=%.3f p95=%.3f max=%.3f]%n",
-                    window, label, rmedian, rp90, rp95, rmax);
-        }
-    }
 }

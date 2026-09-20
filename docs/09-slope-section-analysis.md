@@ -1,11 +1,14 @@
-# 09. Network 기반 SlopeSection 모델 (Phase 12A-12D)
+# 09. Network 기반 SlopeSection 모델 (Phase 12A-12E)
 
 이 문서는 Legacy Frontend의 좌표-개수 기반 경사 시각화(`groupCoordinates(5/7/12)`)를 대체할
 가능성을 검토한 Phase 12A 사전 분석, Backend SlopeSection 모델 구현(Phase 12B), 실사용 적합성
-검증 및 geometry 정확도 보완(Phase 12C), 그리고 4개 Legacy Frontend 화면의 실제 전환(Phase
-12D)까지를 정리한다. **Phase 12D 완료 시점 기준으로 4개 화면 모두 이 문서의 SlopeSection API를
-사용하도록 전환됐다** — §36 이하 참고. Phase 12A/12B/12C 서술(§1-35)은 전환 이전 시점의 분석/
-설계 기록이므로 "아직 검증용" 같은 과거 시제 표현은 그 시점 기준으로 읽는다.
+검증 및 geometry 정확도 보완(Phase 12C), 4개 Legacy Frontend 화면의 실제 전환(Phase 12D),
+그리고 compute-on-request를 precompute + PostGIS 영속화로 전환한 작업(Phase 12E)까지를
+정리한다. **Phase 12E 완료 시점 기준으로 SlopeSection은 더 이상 요청마다 계산되지 않고,
+Network Build 이후 별도 배치로 미리 계산해 저장한 `slope_section` 테이블을 단순 조회만
+한다** — §60 이하 참고. Phase 12A-12D 서술(§1-59)은 그 이전 시점의 분석/설계/구현 기록이므로
+"compute-on-request"/"요청마다 계산" 같은 과거 시제 표현은 그 시점 기준으로 읽는다 —
+계산 공식·20m 단위·Frontend 계약은 Phase 12E에서 전혀 바뀌지 않았고 저장 시점만 바뀌었다.
 
 ## 1. Legacy slope의 문제 (Phase 12A 요약)
 
@@ -725,3 +728,312 @@ Production에서 여전히 이 파일을 사용하는 4개 화면(`RecordStatist
 Frontend production slope 계산 책임은 이번 Phase로 Backend `SlopeSectionService`로 완전히
 이전됐다 — 남은 것은 API 호출/코스 선택/색상 매핑/지도 시각화뿐이다(원본 요청의 "최종 책임
 분리" 정의와 일치).
+
+---
+
+# Phase 12E: compute-on-request → precompute + PostGIS 영속화
+
+## 60. 이번 전환의 설계 이유 (성능 병목 해결이 아님)
+
+Phase 12B-12D의 compute-on-request 구현은 기능적으로 정상이었고 현재 데이터 규모(4개
+Trail, 351 section)에서 성능 문제도 없었다 — 마루(20m, 최대부하) median 응답시간은
+약 48ms였다(§30 재확인). 이번 전환의 이유는 **"느려서"가 아니라 SlopeSection의 데이터
+성격** 때문이다:
+
+> SlopeSection은 동일 Network + 동일 TrailFeature.dn_value + 동일 20m window + 동일
+> 계산식을 입력으로 쓰는 한 **항상 동일하게 재생성되는 결정적(deterministic) 데이터**다.
+> 사용자 요청마다 값이 달라지는 데이터가 아니므로, 계산 시점을 Request Time에서 Build
+> Time으로 옮기는 것이 데이터 성격에 맞는 설계다.
+
+**이번 Phase에서 변경하지 않은 것**(원본 요청의 명시적 제약): Slope 계산 공식,
+20m 분석 단위, `NetworkChainBuilder`/`ElevationProfile`의 판단 규칙, geometry cut 방식,
+Frontend 색상 기준, Base+Overlay UI 구조 — 전부 Phase 12B/12C/12D 그대로다. 바뀐 것은
+"언제 계산하는가"뿐이다.
+
+## 61. 3계층 공간 데이터 모델의 완성
+
+```text
+① Raw Spatial Layer      trail / trail_feature            원본 보존 (spatial-schema.sql)
+② Network Layer          trail_node / trail_segment        위상 baseline (network-schema.sql)
+③ Derived Analysis Layer slope_section                     20m 서비스 분석 단위 (slope-section-schema.sql, 신규)
+                          accident_point (독립 Raw, ③과 병렬)
+```
+
+`slope_section`은 Raw 데이터도 아니고 Network Edge도 아니다 — Network에서 파생된 **서비스용
+분석 결과**다. `trail_segment`(median 길이 ~3m)에 slope 컬럼을 추가하지 않은 이유는 Phase
+12B에서 이미 결론 낸 그대로다(§3 재확인): 31.7%의 Segment가 형제 Segment와 부모 DN을
+그대로 공유하고, 짧은 baseline은 극단값을 만든다. **SlopeSection(20m)은 여러 TrailSegment를
+가로지르는 서비스 분석 단위이지 TrailSegment의 속성이 될 수 없다** — 그래서
+`slope_section.trail_segment_id` 같은 단일 FK도 두지 않았고, N:M provenance 테이블
+(`slope_section_segment`)도 만들지 않았다: 어차피 전체를 Network로부터 통째로 재생성하는
+Derived Layer라 Segment 단위 provenance를 영구 추적할 필요가 없다고 판단했다.
+
+## 62. `slope_section` Schema (실제 DDL)
+
+`backend/src/main/resources/db/postgis/slope-section-schema.sql`:
+```sql
+CREATE TABLE slope_section (
+    id                          BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    trail_id                    BIGINT NOT NULL,
+    chain_sequence              INTEGER NOT NULL,
+    section_sequence            INTEGER NOT NULL,
+    window_m                    INTEGER NOT NULL,
+    distance_m                  DOUBLE PRECISION NOT NULL,
+    estimated_elevation_start   DOUBLE PRECISION NOT NULL,
+    estimated_elevation_end     DOUBLE PRECISION NOT NULL,
+    estimated_elevation_delta   DOUBLE PRECISION NOT NULL,
+    estimated_slope_percent     DOUBLE PRECISION NOT NULL,
+    data_quality_flag           VARCHAR(20),
+    geom                        geometry(LineString, 4326) NOT NULL,
+    generated_at                TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CONSTRAINT fk_slope_section_trail FOREIGN KEY (trail_id) REFERENCES trail(id) ON DELETE CASCADE,
+    CONSTRAINT chk_slope_section_window_m CHECK (window_m = 20),
+    CONSTRAINT chk_slope_section_distance_positive CHECK (distance_m > 0),
+    CONSTRAINT uq_slope_section_sequence UNIQUE (trail_id, window_m, chain_sequence, section_sequence)
+);
+CREATE INDEX idx_slope_section_trail_window_order
+    ON slope_section (trail_id, window_m, chain_sequence, section_sequence);
+```
+
+설계 판단:
+- **`trail_segment_id` 없음**: §61 근거.
+- **`window_m`은 CHECK로 20만 허용**: Production이 실제로 소비하는 값은 20뿐이다(§64).
+  10/30을 같은 테이블에 섞어 저장하면 "20은 DB 조회, 10/30은 다른 의미"처럼 소비자가
+  구분하기 어려운 혼합 의미가 생긴다 — 그래서 아예 스키마 레벨에서 20만 허용한다.
+- **`chain_sequence`/`section_sequence`는 DB identity가 아니라 결정적 순서값**:
+  `NetworkChainBuilder`/`SlopeSectionCalculator`가 이미 매 rebuild마다 같은 Network
+  상태에서 같은 순서를 부여한다(경계 Node id 비교 기반 순회) — 그 값을 그대로 컬럼에
+  복사했을 뿐, 새로운 순서 체계를 만들지 않았다.
+- **`estimated_elevation_source` 컬럼 없음**: 이 값은 응답 전체에 대해 고정된 문자열
+  상수(`SlopeSectionFeatureCollection`)이지 row마다 다른 사실이 아니라 컬럼화하면
+  중복만 생긴다.
+- **`analysis_version` 없음**: 모델이 하나뿐이고 항상 전체 재생성하는 구조라 아직
+  구분할 대상이 없다.
+- **geometry GiST 없음**: Production 쿼리 패턴이 `WHERE trail_id = ? AND window_m = ?
+  ORDER BY ...`뿐이라(§64) geometry 조건절 자체가 없다 — 쓰이지 않을 인덱스를 미리
+  만들지 않았다(`docs/05` Q4와 같은 원칙).
+
+## 63. Build Pipeline과 재사용
+
+```text
+com.season.semiproject.spatial.slope.SlopeSectionBuildService.buildAll()
+  1. SlopeSectionBuildDAO.deleteAllSlopeSections()
+  2. Trail마다:
+     SlopeSectionDAO.findSegmentsForTrail(trailId)      -- 기존 Phase 12B 쿼리 그대로 재사용
+     NetworkChainBuilder.buildChains(rows)                -- 변경 없음
+     SlopeSectionCalculator.computeSections(chain, 20)    -- 변경 없음
+     ChainDistanceLocator + SlopeSectionDAO.cutSections() -- 변경 없음(Phase 12C 로직)
+     → SlopeSectionInsertParam(.... wkt) 생성
+  3. SlopeSectionBuildDAO.insertSlopeSections(전체 351건, 단일 벌크 INSERT)
+  4. count 검증(계산값과 실제 삽입값 불일치 시 SlopeSectionBuildException, 트랜잭션 롤백)
+```
+
+`SlopeSectionBuildService`는 옛 compute-on-request `SlopeSectionService`가 하던 계산
+오케스트레이션을 **그대로 옮겨온 것**이다 — `NetworkChainBuilder`/`ElevationProfile`/
+`SlopeSectionCalculator`/`ChainDistanceLocator`/`GeoJsonLineStringParser`는 단 한 줄도
+바뀌지 않았다. 계산 알고리즘의 Source of Truth는 여전히 하나다.
+
+Runner: `SlopeSectionBuildRunner`(`spatial-slope-build` profile, `NetworkBuildRunner`와
+동일 패턴 — `spring.main.web-application-type=none`으로 실행 후 종료). **애플리케이션
+평상시 기동 시 자동 실행되지 않는다.**
+
+전체 재현 순서(Import/Network Build와 동일 철학):
+```text
+1) Trail Import          (spatial-import)         → trail / trail_feature
+2) Network Build         (spatial-network-build)   → trail_node / trail_segment
+3) Accident Import       (spatial-accident-import) → accident_point
+4) Slope Build           (spatial-slope-build)     → slope_section  ※ 반드시 2) 이후 실행
+5) Application Runtime                              → API는 조회만 수행
+```
+Slope Build가 Network Build보다 먼저 실행되거나 Network Build 후 재실행되지 않으면
+`slope_section`이 stale해질 수 있다 — 이 의존성을 강제하는 자동화 장치는 만들지
+않았고(§26 지시대로 범위를 넓히지 않음), 이 문서와 README Quick Start에 순서를
+명시하는 것으로 대신한다.
+
+## 64. API 계약: windowMeters=20만 허용
+
+기존 `GET .../slope-sections?windowMeters=10|20|30` 중 **Production Frontend가 실제로
+호출하는 값은 20뿐**임을 재확인했다(`frontend/src/api/slopeSection.js`의
+`SLOPE_WINDOW_METERS = 20` 상수, 4개 화면 전수 검색 결과 다른 값 호출 없음). 따라서:
+
+- `SlopeSectionService.ALLOWED_WINDOW_METERS`를 `{10,20,30}` → `{20}`으로 좁혔다.
+- 10/30 요청은 이제 "지원하지 않는 값"과 동일하게 400을 반환한다 — "20은 DB 조회, 10/30은
+  다른 계산"처럼 소비자가 구분해야 하는 혼합 의미를 만들지 않기 위해서다(원본 요청의
+  명시적 금지 사항).
+- 10/30m 비교 코드(`SlopeSectionCalculator`를 직접 호출하는 단위테스트/분석)는 Phase
+  12A-12C 회귀/분석 자료로 계속 유지한다 — HTTP API 레벨에서만 막았다.
+
+Frontend는 **한 줄도 수정하지 않았다** — 이미 20만 호출하고 있었기 때문에 계약 축소가
+실제 소비자에게는 아무 영향이 없었다.
+
+## 65. Query Service (Runtime) 구조
+
+```java
+// SlopeSectionService.getSlopeSections(trailId, windowMeters)
+List<SlopeSectionRow> rows = dao.findPersistedSections(trailId, windowMeters); // SELECT만
+// row -> SlopeSectionFeature 조립 (JsonNode 파싱만, 계산 없음)
+return new SlopeSectionFeatureCollection(trailId, windowMeters, features);
+```
+`NetworkChainBuilder`/`ElevationProfile`/`SlopeSectionCalculator`/`ChainDistanceLocator`
+호출이 이 경로에는 **전혀 없다**. `SlopeSectionController`는 메서드 이름만
+`computeSlopeSections` → `getSlopeSections`로 바꿨고(더 이상 "compute"가 아니므로),
+HTTP 계약(경로/쿼리파라미터/응답 shape)은 전혀 바뀌지 않았다.
+
+**No Runtime Fallback**: DB에 해당 (trail_id, window_m) 조합의 row가 없으면 조용히
+compute-on-request로 돌아가지 않는다 — 빈 `FeatureCollection`을 반환하고,
+`SlopeSectionService`가 WARN 로그(`No persisted SlopeSection rows for trailId=... --
+if this is unexpected, run the spatial-slope-build profile`)를 남긴다. 이렇게 하면
+Production Path가 두 개로 갈라지지 않고, Build 누락을 로그로 바로 식별할 수 있다.
+
+## 66. Build/Query 책임 분리
+
+```text
+SlopeSectionBuildService   (신규) — 계산 + 영속화, spatial-slope-build profile 전용
+SlopeSectionService        (기존 클래스명 유지, 내용 전면 교체) — 조회 + GeoJSON 조립만
+SlopeSectionDAO            (기존) — 두 서비스가 공유하는 읽기 DAO
+  ├─ findSegmentsForTrail/cutSections  : Build 전용(원본 Network 읽기)
+  └─ findPersistedSections             : Query 전용(slope_section 읽기, 신규)
+SlopeSectionBuildDAO       (신규) — 쓰기 전용 DAO(delete-all, bulk insert, count)
+```
+DAO를 두 개로 나눈 기준은 "읽기 vs 쓰기"이지 "Build vs Query"가 아니다 — `SlopeSectionDAO`는
+두 서비스 모두가 읽기 목적으로 공유한다. 클래스 수를 필요 이상으로 늘리지 않기 위해
+Build/Query 각각 서비스 1개, DAO는 읽기 1개 + 쓰기 1개로 정리했다.
+
+## 67. Parity 검증 (compute-on-request 시절 응답과 완전 비교)
+
+전환 직전(코드 변경 전) 살아있던 compute-on-request 서버에서 4개 Trail의 실제 HTTP
+응답을 그대로 캡처해 baseline으로 저장한 뒤, 전환 후 정확히 같은 요청을 다시 보내
+필드 단위로 비교했다:
+
+```text
+trail=10(마루)     before=251건 after=251건  최대 property 절대오차=0.0  geometry 불일치=0/251
+trail=11(무악동구간) before=49건  after=49건   최대 property 절대오차=0.0  geometry 불일치=0/49
+trail=12(홍제동구간) before=21건  after=21건   최대 property 절대오차=0.0  geometry 불일치=0/21
+trail=13(부암동구간) before=30건  after=30건   최대 property 절대오차=0.0  geometry 불일치=0/30
+
+payload byte 크기: 4개 Trail 전부 before/after 완전 동일(예: 마루 143,806 bytes = 143,806 bytes)
+```
+`distanceMeters`/`estimatedElevationStart/End/Delta`/`estimatedSlopePercent`/
+`dataQualityFlag`/geometry 좌표 전부 **완전히 동일**했다 — 부동소수점 오차조차 없었다
+(WKT 왕복 직렬화가 원래 값의 정밀도를 그대로 보존했기 때문). 이는 §60에서 주장한
+"결정적 데이터"라는 전제가 실측으로 확인된 것이기도 하다.
+
+## 68. Idempotency / Rollback 검증
+
+**Idempotency** (`spatial-slope-build` profile 연속 2회 실행, 실제 DB):
+```text
+1차 실행: totalSections=351, {10=251, 11=49, 12=21, 13=30}
+2차 실행: totalSections=351, {10=251, 11=49, 12=21, 13=30}   (완전 동일)
+중복 (trail_id, window_m, chain_sequence, section_sequence) 그룹: 0건
+```
+
+**Rollback** (`SlopeSectionBuildServiceIntegrationTest`, 실제 DB, `TransactionTemplate`으로
+독립 트랜잭션 유도): 정상 351건 상태에서 `chk_slope_section_window_m`을 위반하는 row
+(`window_m=99`)를 delete-then-insert 트랜잭션 안에서 삽입 시도 → `DataIntegrityViolationException`
+발생 → 트랜잭션 롤백 → 재확인 결과 **351건 그대로 유지**(DELETE까지 함께 롤백됨, 빈
+테이블로 남지 않음).
+
+## 69. API Before/After 성능 (마루, 20m, warmup 5회 + 측정 30회)
+
+| 지표 | Before(compute-on-request) | After(precomputed 조회) |
+|---|---:|---:|
+| median | 48.11ms | 9.51ms |
+| avg | 47.81ms | 9.56ms |
+| p95 | 54.23ms | 10.98ms |
+| max | 57.41ms | 11.37ms |
+| payload | 143,806 bytes | 143,806 bytes(동일) |
+
+**해석**: "현재 병목을 해결했다"가 아니라, 반복 계산(Segment 조회 → Java 그래프 재구성
+→ Chain → ElevationProfile → 20m 절단 → geometry cut → GeoJSON 변환)을 서비스 요청
+경로에서 제거해 단순 조회로 축소했고, 동일 환경에서 그 결과 응답 비용이 어떻게
+바뀌는지 측정한 것이다. 두 값 모두 이 로컬 Docker 환경 기준이며 production latency가
+아니다.
+
+## 70. EXPLAIN ANALYZE (Production 쿼리)
+
+```sql
+EXPLAIN ANALYZE
+SELECT ... FROM slope_section WHERE trail_id = 10 AND window_m = 20
+ORDER BY chain_sequence, section_sequence;
+```
+```text
+Index Scan using uq_slope_section_sequence on slope_section
+  (actual time=1.5..2.0 rows=251 loops=1)
+  Index Cond: ((trail_id = 10) AND (window_m = 20))
+Planning Time: ~16ms   Execution Time: ~23-26ms
+```
+UNIQUE 제약이 자동으로 만든 btree 인덱스(`trail_id, window_m, chain_sequence,
+section_sequence`)가 그대로 Index Scan에 쓰인다 — Seq Scan이 아니다. Execution Time의
+대부분(약 21ms)은 251개 row 각각의 `ST_AsGeoJSON` 직렬화 비용이지 인덱스 탐색 비용이
+아니다(인덱스 탐색 자체는 ~2ms). 현재 351건 규모에서 추가 최적화가 필요하다는 근거는
+없다.
+
+## 71. Build 성능
+
+4개 Trail, 351 section 전체 재계산 + 벌크 INSERT: **약 480-500ms**(연속 2회 실행 실측,
+496ms/475ms). Runtime API 성능과 별도로 기록한다 — Build는 배치 작업이라 응답시간
+민감도가 다르다.
+
+## 72. Fresh Rebuild (Slope Build 포함)
+
+Phase 10과 동일한 방식(`template_postgis`에서 임시 `safety_hiking_bench` 생성)으로
+전체 파이프라인을 처음부터 재현했다:
+```text
+schema.sql → seed.sql → spatial-schema.sql → network-schema.sql → accident-schema.sql
+→ slope-section-schema.sql
+→ spatial-import → spatial-network-build → spatial-accident-import → spatial-slope-build
+```
+결과: `trail=4, trail_feature=1706, trail_node=2526, trail_segment=2122,
+accident_point=42, slope_section=351`(Trail별 251/49/21/30) — **운영 DB와 완전히 동일하게
+재현됨을 확인**하고 임시 DB는 삭제했다. 운영 DB는 이 과정 동안 전혀 손대지 않았다(재확인:
+재현 전후 운영 DB `slope_section` count 351로 불변).
+
+## 73. Tests
+
+```text
+SlopeSectionBuildServiceIntegrationTest (신규, 9개) — count/geometry validity/numeric
+  validity/slope formula/geometry-vs-distance error/idempotency/rollback
+SlopeSectionServiceIntegrationTest (9개, 재작성) — 조회 전용 검증, ordering, empty-not-error,
+  Raw/Network 계층 count 불변
+SlopeSectionApiTest (6개, 갱신) — windowMeters=20만 허용, 10/30 명시적 거부(400) 확인
+SlopeCoverageAnalysisTest (1개, geometry-error 섹션 제거) — 순수 계산 기반 coverage 분석은
+  그대로 유지
+```
+전체 Backend 회귀: **137 / 137 PASS**(기존 125 + 신규/수정 반영 순증 12).
+
+## 74. Known Limitations (Phase 12E 시점 추가)
+
+- `slope_section`은 여전히 20m 하나만 저장한다 — 다른 window가 필요해지면 스키마
+  변경(또는 별도 테이블)이 필요하다.
+- Network Build → Slope Build 순서 의존성은 문서로만 강제된다 — 자동 검증/차단 장치는
+  없다(§63).
+- geometry GiST를 두지 않았으므로, 향후 이 테이블에 공간 predicate 조회(예: 사고 지점
+  주변 SlopeSection 찾기)가 필요해지면 그때 인덱스를 재검토해야 한다.
+- `chk_slope_section_window_m CHECK (window_m = 20)`은 현재 설계를 강하게 고정한다 —
+  향후 다른 window를 지원하려면 이 제약 자체를 다시 설계해야 한다(의도된 트레이드오프).
+
+---
+
+# Phase 12F: Frontend `trail_id` 하드코딩 제거
+
+Phase 12E의 Fresh Rebuild(§72)에서 `trail.id`가 운영 DB(10~13)와 새 DB(1~4)에서 다르게
+채번됨을 확인했다 — `trail.id`는 PostgreSQL surrogate PK이지 도메인 상수가 아니다. §36에서
+도입한 `TRAIL_ID_BY_COURSE_NAME`(courseName→고정 숫자 맵)은 이 사실과 어긋나는 하드코딩이었으므로
+제거했다.
+
+**변경**: `mapper-trail-geojson.xml`의 `properties`에 `trailId`(= `t.id`) 한 필드만 추가했다 —
+기존 `PMNTN_NM`/`DN`은 그대로다. `frontend/src/api/slopeSection.js`의 `resolveTrailId(courseName)`을
+`resolveTrailId(courseName, trailGeoJson)`으로 바꿔 이 필드를 런타임에 읽도록 했다 — course DB
+테이블의 courseName("무악동" 등)과 PMNTN_NM("무악동구간" 등)이 다른 문제는 이름→이름 alias
+테이블(`COURSE_NAME_TO_SOURCE_COURSE_NAME`)로만 해결하고, PMNTN_NM 매칭은 기존 §36의
+`.includes()` 부분일치 대신 정확히 일치(`===`)하는 것만 인정한다 — 일치하는 `trailId`가
+0개거나 2개 이상이면 하드코딩 fallback 없이 즉시 예외를 던진다. `MountainDetailView2.vue`는
+특정 코스를 고르지 않으므로 `resolveAllTrailIds(trailGeoJson)`로 현재 DB에 실제로 존재하는
+`trailId` 전체를 읽어 순회한다.
+
+운영 DB(10/11/12/13)와 별도 Fresh Rebuild DB(1/2/3/4) 양쪽에서 동일한 Frontend 코드로
+section 개수(251/49/21/30)가 그대로 재현됨을 확인했다 — Frontend 코드 변경 없이 PK 값만
+달라져도 동작한다는 것이 이번 수정의 목표였다.
+
+**Backend 테스트**: `TrailGeoJsonServiceTest`/`TrailGeoJsonApiTest`에 `trailId` 존재 확인과
+PMNTN_NM↔trailId 1:1 검증 테스트를 추가했다 — **138/138 PASS**(Phase 12E의 137 + 1건).

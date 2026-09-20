@@ -14,7 +14,13 @@ import java.util.List;
  * Phase 8 spatial proximity API between AccidentPoint (Raw) and TrailSegment (Derived Network).
  * `distanceMeters` is always a caller-chosen search radius -- this API never hardcodes or implies
  * a "risk radius" (see docs/05-accident-spatial-query.md for why 30m/any fixed value is not
- * treated as a domain-meaningful threshold). Not yet wired into any Frontend view (Phase 9).
+ * treated as a domain-meaningful threshold).
+ *
+ * API A/B (Accident<->Segment, single id in, single id out) are still not wired into any
+ * Frontend view. API C (Phase 13, {@code /trails/{trailId}/nearby-accidents}) IS consumed by
+ * RecordView.vue's real-time proximity alert -- PostGIS only selects the Trail-level candidate
+ * set here; the live user-location comparison against those candidates stays a Frontend/Kakao
+ * Maps distance concern (see docs/05-accident-spatial-query.md, Phase 13 section).
  */
 @RestController
 @RequestMapping("/api/spatial")
@@ -55,5 +61,22 @@ public class SpatialQueryController {
         }
         List<NearbyAccidentRow> result = service.findAccidentsNearSegment(segmentId, distanceMeters);
         return ResponseEntity.ok(result);
+    }
+
+    /** API C: Trail -> distinct nearby AccidentPoint candidates (one Feature per accidentId,
+     * closest TrailSegment distance kept), as a GeoJSON FeatureCollection<Point>. Consumed by
+     * RecordView's real-time proximity alert (PostGIS only selects candidates near the Trail;
+     * the live user-location comparison stays a Frontend/Kakao-distance concern). */
+    @GetMapping("/trails/{trailId}/nearby-accidents")
+    public ResponseEntity<?> nearbyAccidentsForTrail(
+            @PathVariable long trailId,
+            @RequestParam double distanceMeters) {
+        if (distanceMeters <= 0) {
+            return ResponseEntity.badRequest().body("distanceMeters must be greater than 0");
+        }
+        if (!service.trailExists(trailId)) {
+            return ResponseEntity.notFound().build();
+        }
+        return ResponseEntity.ok(service.findAccidentCandidatesForTrail(trailId, distanceMeters));
     }
 }

@@ -177,12 +177,57 @@ GET /api/spatial/trail-segments/{segmentId}/nearby-accidents?distanceMeters=N
 ]
 ```
 
-두 API 모두:
+### API C — Trail → distinct nearby AccidentPoint candidates (Phase 13)
+```text
+GET /api/spatial/trails/{trailId}/nearby-accidents?distanceMeters=N
+```
+A/B는 accidentId 1개 또는 segmentId 1개를 입력으로 받는다. 실제 서비스 기능(등산 중 위험 알림)에
+필요한 것은 "현재 Trail 전체 주변의 사고지점 후보 목록"이므로, Segment를 하나씩 순회하는 N+1 호출
+대신 Trail 전체를 한 번에 조회하는 API C를 Phase 13에서 추가했다. 내부적으로는 A/B와 동일한
+`ST_DWithin`/`ST_Distance`/`::geography` 패턴을 그대로 재사용하고, `trail_segment` → `trail_feature`
+→ `trail_id`로 조인해 Trail 범위로 좁힌다(`trail_segment`에는 `trail_id` 컬럼이 없다 — 저장하지
+않기로 한 이유는 `docs/01`, Phase 6 참고). GeoJSON `FeatureCollection<Point>` 형태로 응답한다:
+```json
+{
+  "type": "FeatureCollection",
+  "trailId": 11,
+  "distanceMeters": 30.0,
+  "features": [
+    {
+      "type": "Feature",
+      "properties": {
+        "accidentId": 16956,
+        "reportNo": "20231103201R00346",
+        "dispatchDate": "2023-05-14",
+        "accidentType": "질환",
+        "locationName": "무악동",
+        "distanceToTrailMeters": 1.46143669
+      },
+      "geometry": { "type": "Point", "coordinates": [126.959075031, 37.578950447] }
+    }
+  ]
+}
+```
+`distanceToTrailMeters`는 Trail ↔ AccidentPoint 거리(PostGIS, 후보 선별용)이며, 사용자 ↔ AccidentPoint
+실시간 거리(Frontend, Kakao Maps `Polyline.getLength()`)와는 다른 값이다 — 이름 자체를 다르게 둬서
+혼동을 막는다(`RecordView.vue`의 `ACCIDENT_CANDIDATE_DISTANCE_METERS`/`ACCIDENT_ALERT_DISTANCE_METERS`도
+동일한 이유로 값은 같아도 상수를 분리했다).
+
+**중복 제거**: 하나의 AccidentPoint가 같은 Trail의 여러 TrailSegment 근처에 있을 수 있다(무악동구간의
+사고 하나는 실제로 24개 서로 다른 Segment가 30m 이내에 걸린다 — Segment 중앙값 길이가 ~3m라서
+자연스러운 현상). SQL에서 `GROUP BY a.id` + `MIN(ST_Distance(...))`로 dedup과 최소거리 계산을
+동시에 처리하므로, GROUP BY 이전 원본 조인은 24행이지만 API 응답은 항상 accidentId당 1개 Feature다.
+
+두 API 모두(A/B):
 - `distanceMeters <= 0` → 400
 - 존재하지 않는 accidentId/segmentId → 404
 - 결과 없음 → 200 + 빈 배열(에러 아님)
 
-Frontend는 아직 연결하지 않았다(Phase 9).
+API C도 동일한 계약(`distanceMeters<=0`→400, 존재하지 않는 trailId→404, 후보 0건→200+빈
+FeatureCollection)을 따른다.
+
+API A/B는 Phase 9 이후로도 여전히 Frontend에 연결되지 않았다. API C는 Phase 13에서
+`RecordView.vue`의 실시간 위험 알림에 연결됐다 — 아래 11번 절 참고.
 
 ## 10. 남아 있는 한계 (숨기지 않고 기록)
 
@@ -194,3 +239,125 @@ Frontend는 아직 연결하지 않았다(Phase 9).
   부여하면 안 된다.
 - 사고 건수만으로 위험도를 산출할 수 없다(8번) — Segment/Trail 단위 위험도 API는 이번에도, 향후
   계획도 없다(도입하려면 노출량/이용객 수/사고 심각도 등 정규화 요소가 별도로 필요하다).
+
+## 11. Phase 13: RecordView 실시간 위험 알림 연결
+
+기존 사전 분석(별도 세션 기록)에서 확인된 문제: `RecordView.vue`의 실시간 위험 음성 알림은
+`frontend/public/data/2023산악사고_인왕산2.geojson`("Legacy UI Display Dataset", 15건)을 썼는데,
+이 파일은 15건 중 5건만 실제 `report_no`를 갖고 그중 1건이 좌표/유형을 조작해 11번 재사용된
+것으로, 실제 42건 `accident_point`와는 완전히 다른 데이터였다(`accident-schema.sql` 참고).
+
+**Production 알림 경로에서 이 파일 사용을 제거**하고 API C로 교체했다. 파일 자체는 지우지 않았다
+(provenance/과거 회귀 검증 목적) — 삭제가 아니라 사용처 교체다.
+
+### 최종 흐름
+
+```text
+RecordView mount
+  → fetchTrailGeoJson()                              (기존, Phase 12F에서 추가된 trailId property 재사용)
+  → resolveAllTrailIds(trailGeoJson)                  (기존 공유 함수, slopeSection.js)
+  → 각 trailId마다 fetchNearbyAccidents(trailId, 30)   (API C, Phase 13 신규)
+  → accidentId 기준 전역 dedup (Frontend, Map)
+  → Kakao Marker 생성 (accidentType/locationName/dispatchDate/distanceToTrailMeters 사용)
+
+이후 기존 2초 폴링(GET /api/recordlocation) → checkProximityUsingPolyline
+  → Kakao Polyline.getLength() 기반 사용자-사고 거리 계산 (변경 없음)
+  → distance <= 30m → speakMessage() (변경 없음)
+  → triggeredAccidentIds(accident_point.id 기준, 좌표 문자열에서 변경) 로 중복 알림 방지
+```
+
+**RecordView는 코스 선택 UI가 없다.** `/record` 라우트는 파라미터가 없고, 진입 지점(footer 버튼,
+MainView 카드)도 전부 `window.location.href = '/record'`로 아무 값도 넘기지 않는다 — 즉 현재 코스를
+전달할 기존 route query/Pinia/sessionStorage 관례가 애초에 존재하지 않는다. 새로 하나를 만드는 대신,
+`MountainDetailView2.vue`가 이미 쓰고 있는 "코스 선택이 없으면 현재 DB에 존재하는 Trail 전체를
+순회한다"는 패턴(`resolveAllTrailIds`)을 그대로 재사용했다 — Trail 4개 각각 독립적으로 API C를
+호출하고 결과를 합친다(N+1 아님: Trail 개수는 4로 고정, Segment 순회가 아니다).
+
+### 실측: Trail별 30m 후보 수 (운영 DB)
+
+| Trail | trailId(운영 DB) | 30m 후보 수 |
+|---|---|---|
+| 마루 | 10 | 0 |
+| 무악동구간 | 11 | **2** |
+| 홍제동구간 | 12 | 0 |
+| 부암동구간 | 13 | 0 |
+
+4개 Trail 전체 합산 unique 후보는 2건 — 10번 절의 "42건 중 2건만 30m 이내"와 정확히 일치한다.
+
+### 중복 제거 실측
+
+무악동구간 accidentId(report_no=20231103201R00346)는 GROUP BY 이전 원본 조인에서 **24행**
+(TrailSegment 24개가 30m 이내) → GROUP BY 이후 **1행**(distanceToTrailMeters=1.46m)으로 축소됨을
+실제 DB에서 확인했다.
+
+### Query 성능 (실측)
+
+`EXPLAIN ANALYZE`, 무악동구간(trailId=11, 216개 TrailFeature 소속 TrailSegment, distanceMeters=30):
+Planning ~24ms, Execution ~74ms(3회 반복, JIT off). 42 accident × 216 segment ≈ 9,000쌍 규모의
+Nested Loop이며, `accident_point.geom`/`trail_segment.geom` 둘 다 GiST index가 있지만 이 정도
+행 수에서는 planner가 index scan을 선택하지 않았다 — 현재 규모(§32 지시대로)에서 추가 인덱스를
+넣지 않았다.
+
+### 남아있는 범위 밖 사용처 (제거하지 않음, 정직하게 기록)
+
+`2023산악사고_인왕산2.geojson`은 `RecordView.vue`가 아닌 최소 9개의 다른 화면
+(`MountainDetailView.vue`, `MobileMountainDetailView.vue`, `CompareCourseView.vue`,
+`3dView.vue`/`3dAnalysisView.vue`/`WebCourse3D.vue`/`MobileCourse3D.vue` 등)에서도 여전히
+`loadMarkers`/`loadDangerMarkers` 형태로 지도에 위험 마커를 표시하는 데 쓰이고 있다. 이 화면들에는
+`checkProximityUsingPolyline`/`speakMessage` 같은 실시간 접근-판정 로직이 없다 — 정적 마커 표시
+기능이며, 이번 Phase의 범위(`RecordView`의 실시간 30m 음성 알림)에 해당하지 않아 손대지 않았다.
+"Legacy 사고 데이터가 Production에서 완전히 사라졌다"고 주장할 수는 없고, "RecordView의 실시간
+위험 알림 경로에서만 제거하고 실제 42건으로 교체했다"가 정확한 서술이다.
+
+### Phase 14: "현재 Trail 하나만 조회" 축소 시도 — Large Change로 판정, 미구현
+
+Phase 13의 4-Trail 전체 조회 구조를 "사용자가 실제로 선택한 Trail 하나만 조회"로 좁힐 수 있는지
+조사했다. 결론: **Large Change로 판정, 구현하지 않고 현재 구조를 유지한다.**
+
+**조사한 것**: `/record`로 이동하는 모든 경로를 repo 전체에서 검색했다 —
+`MobileFooterView.vue`~`MobileFooterView5.vue`(전역 하단 네비게이션), `MainView.vue`/
+`MobileMainView.vue`의 `gotoMobileRecording`("등산 기록" 카드), `MyCommunity.vue`,
+`RecordImgView.vue`(기록 저장 후 복귀). **전부 예외 없이** `window.location.href = '/record'`
+또는 파라미터 없는 `router.push({path:'/record'})`이며, `router/index.js`의 `/record` route
+정의에도 `params`/`props`가 없다. `MainView.vue`는 코스 목록(`courses`)과 코스 상세 이동
+(`goToMountainDetail`, `router.push({query:{course: JSON.stringify(course)}}}`) 관례를 이미
+갖고 있지만, "등산 기록" 카드는 그 코스 목록과 **완전히 분리된, 독립적인 버튼**이라 이 관례를
+타지 않는다. `MountainDetailView*.vue`(코스가 실제로 확정된 화면) 어디에도 `/record`로 가는
+링크가 없다 — 즉 "코스를 이미 아는 상태에서 기록을 시작하는" 진입 경로 자체가 현재 앱에
+존재하지 않는다. `sessionStorage`/`localStorage`에도 재사용 가능한 "현재 코스" 값이 없다
+(`BalanceView.vue`의 `selectedCourseIds`는 코스 비교 화면 전용이고 RecordView는 읽지 않는다).
+
+**판정 근거**: Small Change의 전제("이미 알고 있는 courseName을 작은 값 전달로 넘긴다")가
+성립하려면 애초에 "코스를 알고 있는 시점 → 기록 시작" 흐름이 있어야 하는데, 그 흐름 자체가
+없다. 따라서 이 문제를 해결하려면 값 하나를 route query/sessionStorage로 넘기는 것을 넘어서
+**"기록 시작 전 코스를 고르게 하는 새 UX 단계"를 설계해 추가**해야 한다 — 이는 원 요청의
+Large Change 기준("여러 화면의 navigation 구조를 대규모 변경", "course domain 자체를 다시
+설계")에 해당한다.
+
+**유지한 현재 구조**: `resolveAllTrailIds(trailGeoJson)` 기반 4-Trail 전체 조회를 그대로
+둔다. 다른 기능(`MountainDetailView2.vue`)에서도 쓰이는 공용 함수이므로 제거 대상도 아니다.
+
+**정확한 Portfolio 문장**: "선택한 Trail 주변 사고지점만 후보로 선별했다"는 **현재 구현과
+맞지 않으므로 쓰지 않는다.** 정확한 서술은:
+> 사고지점을 독립적인 Point 공간 객체로 모델링하고 TrailSegment와 PostGIS `ST_DWithin`/
+> `ST_Distance` 공간질의로 연결했습니다. 등록된 Trail Network 주변 사고지점을 후보로
+> 선별한 뒤, 등산 중 사용자의 현재 위치와 후보 사고지점의 거리를 계산해 30m 접근 시 위험
+> 알림을 제공했습니다.
+
+**향후 최소 개선안(구현 아님, 제안만)**: "등산 기록" 진입 지점(현재 `gotoMobileRecording`)
+바로 앞에 코스 선택 모달/화면을 하나 추가하고, 선택된 courseName을 `router.push`의 `query`로
+`/record`에 전달하면(기존 `goToMountainDetail`과 동일한 관례) `resolveTrailId(courseName,
+trailGeoJson)`(Phase 12F에서 이미 만든 함수)로 Trail 하나만 resolve할 수 있다 — 이 개선은
+"RecordView 코드 수정"이 아니라 "기록 시작 UX에 코스 선택 단계를 추가하는" 별도 제품 결정이
+먼저 필요하므로 별도 Phase로 분리해 둔다.
+
+### Known Limitations (Phase 13 시점)
+
+- 사용자 위치는 여전히 Spatial DB Object가 아니다(Backend의 `/api/recordlocation`/`/api/location`은
+  JVM 메모리에만 위치를 들고 있다) — 이번 Phase는 이를 바꾸지 않았다.
+- 사용자 ↔ AccidentPoint 실시간 비교는 여전히 100% Frontend/Kakao Maps 계산이다. Backend는 Trail
+  주변 후보 선별까지만 담당한다.
+- 30m는 이번에도 "객관적 위험 반경"이 아니라 기존 서비스가 쓰던 alert 값을 그대로 재사용한
+  것이다(3번 절 원칙과 동일).
+- `HikingRecord`(path_info/tracking_path)는 이번 Phase에서 공간모델링하지 않았다 — 여전히 순수
+  관계형 GPS point row다.

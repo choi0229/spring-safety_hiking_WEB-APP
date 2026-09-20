@@ -9,10 +9,10 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 /**
- * Phase 12B verification API: Network-based fixed-distance SlopeSection GeoJSON, computed on
- * request from TrailSegment/TrailNode + TrailFeature.dn_value -- see
- * docs/09-slope-section-analysis.md. Not yet wired into any Frontend screen; the 4 Legacy slope
- * views are untouched (see docs/04-legacy-slope-compatibility.md).
+ * Network-based fixed-distance SlopeSection GeoJSON API, backed by the precomputed
+ * `slope_section` Derived Analysis Layer (see docs/09-slope-section-analysis.md) -- this
+ * Controller and {@link SlopeSectionService} never compute a SlopeSection at request time.
+ * Consumed by the 4 slope Frontend screens (Base Trail Layer + Slope Overlay, Phase 12D).
  */
 @RestController
 @RequestMapping("/api/spatial/trails")
@@ -36,6 +36,6 @@ public class SlopeSectionController {
         if (!service.trailExists(trailId)) {
             return ResponseEntity.notFound().build();
         }
-        return ResponseEntity.ok(service.computeSlopeSections(trailId, windowMeters));
+        return ResponseEntity.ok(service.getSlopeSections(trailId, windowMeters));
     }
 }

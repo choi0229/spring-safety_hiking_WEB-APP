@@ -1,39 +1,81 @@
 // Phase 12D: shared client for the Network-based fixed-distance SlopeSection Backend API
 // (see backend docs/09-slope-section-analysis.md). Used by the 4 slope visualization screens
 // (MountainDetailView, CompareCourseView, MountainDetailView2, MobileMountainDetailView) so all
-// of them use the exact same Trail ID mapping, window size and color rule -- client-independent
-// by design, replacing the old per-screen groupCoordinates(5/7/12) + calculateSlope().
+// of them use the exact same window size and color rule -- client-independent by design,
+// replacing the old per-screen groupCoordinates(5/7/12) + calculateSlope().
 //
 // estimatedSlopePercent is a DEM-derived ESTIMATED slope, not a measured one -- see docs/09.
 
-// Keys are the Trail GeoJSON API's properties.PMNTN_NM values (see docs/09). The `course` DB
-// table's course_name is shorter for 3 of 4 courses ("무악동"/"홍제동"/"부암동", no "구간"
-// suffix -- verified against the real DB) -- resolveTrailId() below matches the same way the
-// legacy PMNTN_NM.includes(courseName) filter always did, so callers should use resolveTrailId()
-// rather than indexing this map directly with a `course` table courseName.
-export const TRAIL_ID_BY_COURSE_NAME = {
-  '마루': 10,
-  '무악동구간': 11,
-  '홍제동구간': 12,
-  '부암동구간': 13,
-};
-
 export const SLOPE_WINDOW_METERS = 20;
 
+// `trail.id` is a PostgreSQL surrogate PK, not a domain constant -- it is whatever value a given
+// database happened to assign on import (verified: the operating DB currently has 마루=10, a
+// Fresh Rebuild produced 마루=1). This module MUST NOT hardcode those values (see docs/09,
+// "trail.id is a surrogate PK"). Name-only compatibility between the `course` DB table's
+// courseName ("무악동", no "구간" suffix -- verified against the real DB) and the Trail GeoJSON
+// API's properties.PMNTN_NM ("무악동구간") is still needed, so that alias stays -- it maps
+// names to names, never a name to a database id.
+const COURSE_NAME_TO_SOURCE_COURSE_NAME = {
+  '마루': '마루',
+  '무악동': '무악동구간',
+  '홍제동': '홍제동구간',
+  '부암동': '부암동구간',
+};
+
 /**
- * Resolves a Trail ID from a courseName that may come from either source: the Trail GeoJSON's
- * PMNTN_NM (exact match) or the `course` DB table's shorter course_name (substring of a
- * PMNTN_NM). Returns undefined if no known course matches.
+ * Resolves the current database's Trail ID for a courseName, using only data the Backend
+ * actually returned in `trailGeoJson` (see fetchTrailGeoJson()) -- never a hardcoded id and
+ * never a fallback default. `trailGeoJson.features[].properties.trailId` is the Source of Truth
+ * (see docs/09-slope-section-analysis.md); `courseName` may come from either the Trail GeoJSON's
+ * own PMNTN_NM (exact match) or the shorter `course` DB table name (resolved through the alias
+ * table above -- name-only, never id-only).
+ *
+ * Throws (never returns undefined/null and never silently picks a value) if courseName does not
+ * resolve to a source course name that appears in trailGeoJson, or if that source course name
+ * maps to more than one distinct trailId -- both are data inconsistencies the caller must not
+ * paper over.
  */
-export function resolveTrailId(courseName) {
+export function resolveTrailId(courseName, trailGeoJson) {
   if (!courseName) {
-    return undefined;
+    throw new Error('resolveTrailId: courseName is required');
   }
-  if (TRAIL_ID_BY_COURSE_NAME[courseName] !== undefined) {
-    return TRAIL_ID_BY_COURSE_NAME[courseName];
+  if (!trailGeoJson || !Array.isArray(trailGeoJson.features)) {
+    throw new Error('resolveTrailId: a Trail GeoJSON FeatureCollection (see fetchTrailGeoJson()) is required');
   }
-  const matchedPmntnNm = Object.keys(TRAIL_ID_BY_COURSE_NAME).find((pmntnNm) => pmntnNm.includes(courseName));
-  return matchedPmntnNm ? TRAIL_ID_BY_COURSE_NAME[matchedPmntnNm] : undefined;
+
+  const sourceCourseName = COURSE_NAME_TO_SOURCE_COURSE_NAME[courseName] || courseName;
+  const trailIds = new Set(
+    trailGeoJson.features
+      .filter((feature) => feature.properties && feature.properties.PMNTN_NM === sourceCourseName)
+      .map((feature) => feature.properties.trailId)
+  );
+
+  if (trailIds.size === 0) {
+    throw new Error(
+        `resolveTrailId: no Trail found for courseName="${courseName}" (resolved sourceCourseName="${sourceCourseName}")`);
+  }
+  if (trailIds.size > 1) {
+    throw new Error(
+        `resolveTrailId: courseName="${courseName}" resolved to multiple distinct trailId values `
+        + `[${[...trailIds].join(', ')}] -- this is a data inconsistency, not something to guess past`);
+  }
+  return trailIds.values().next().value;
+}
+
+/**
+ * Every distinct trailId actually present in trailGeoJson, for the one screen
+ * (MountainDetailView2.vue) that renders all courses at once instead of a single selected one --
+ * also derived from Backend metadata only, never a hardcoded id list.
+ */
+export function resolveAllTrailIds(trailGeoJson) {
+  if (!trailGeoJson || !Array.isArray(trailGeoJson.features)) {
+    throw new Error('resolveAllTrailIds: a Trail GeoJSON FeatureCollection (see fetchTrailGeoJson()) is required');
+  }
+  const trailIds = new Set(
+      trailGeoJson.features
+          .map((feature) => feature.properties && feature.properties.trailId)
+          .filter((trailId) => trailId !== undefined && trailId !== null));
+  return [...trailIds];
 }
 
 // Thresholds chosen from the real 20m estimatedSlopePercent distribution (see docs/09, Phase
@@ -69,7 +111,9 @@ export function getEstimatedSlopeColor(estimatedSlopePercent) {
   return COLOR_MODERATE;
 }
 
-/** Full Validated TrailFeature set (1706 Features) as one GeoJSON FeatureCollection. */
+/** Full Validated TrailFeature set (1706 Features) as one GeoJSON FeatureCollection. Each
+ * Feature's properties now include `trailId` (the current database's `trail.id`) -- the Source
+ * of Truth resolveTrailId()/resolveAllTrailIds() read from. */
 export async function fetchTrailGeoJson() {
   const response = await fetch('/api/spatial/trails/geojson');
   if (!response.ok) {

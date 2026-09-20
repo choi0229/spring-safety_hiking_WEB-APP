@@ -38,7 +38,8 @@ class TrailGeoJsonApiTest {
                 .andExpect(jsonPath("$.features[*].type", everyItem(is("Feature"))))
                 .andExpect(jsonPath("$.features[*].geometry.type", everyItem(is("MultiLineString"))))
                 .andExpect(jsonPath("$.features[0].properties.PMNTN_NM").exists())
-                .andExpect(jsonPath("$.features[0].properties.DN").exists());
+                .andExpect(jsonPath("$.features[0].properties.DN").exists())
+                .andExpect(jsonPath("$.features[0].properties.trailId").exists());
     }
 
     @Test

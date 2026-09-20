@@ -151,5 +151,52 @@ class SpatialQueryIntegrationTest {
     void nonExistentIdsReturnZeroCounts() {
         assertEquals(0, dao.countAccidentById(999_999_999L));
         assertEquals(0, dao.countSegmentById(999_999_999L));
+        assertEquals(0, dao.countTrailById(999_999_999L));
+    }
+
+    private long trailIdByCourseName(String sourceCourseName) {
+        return jdbcTemplate.queryForObject(
+                "SELECT id FROM trail WHERE source_course_name = ?", Long.class, sourceCourseName);
+    }
+
+    @Test
+    void trailLevelQueryDedupesAnAccidentMatchingManySegmentsIntoOneRowWithMinDistance() throws Exception {
+        // The same 24-raw-match accident as exhaustiveResultsIncludeMatchesOutsideAnySmallKnnWindow
+        // above, but through the Trail-level query (Phase 13): GROUP BY a.id must collapse those
+        // 24 TrailSegment matches into exactly one row, keeping the MIN distance (~1.46m).
+        ensureImported();
+        long trailId = trailIdByCourseName("무악동구간");
+
+        List<NearbyAccidentCandidateRow> results = dao.findAccidentCandidatesForTrail(trailId, 30.0);
+        long matches = results.stream().filter(r -> r.getReportNo().equals(NEAREST_REPORT_NO)).count();
+
+        assertEquals(1, matches, "an accident near many Segments of the same Trail must appear once");
+        NearbyAccidentCandidateRow row = results.stream()
+                .filter(r -> r.getReportNo().equals(NEAREST_REPORT_NO)).findFirst().orElseThrow();
+        assertEquals(1.46, row.getDistanceToTrailMeters(), 0.01);
+    }
+
+    @Test
+    void trailLevelCandidateCountsMatchTheKnownThirtyMeterBaselineForAllFourTrails() throws Exception {
+        // Same underlying fact as onlyTwoOfFortyTwoAccidentsHaveAnySegmentWithinThirtyMeters above
+        // (both of the 2 matching accidents happen to be nearest 무악동구간's Network), now
+        // verified per-Trail through the new Trail-level query.
+        ensureImported();
+        assertEquals(0, dao.findAccidentCandidatesForTrail(trailIdByCourseName("마루"), 30.0).size());
+        assertEquals(2, dao.findAccidentCandidatesForTrail(trailIdByCourseName("무악동구간"), 30.0).size());
+        assertEquals(0, dao.findAccidentCandidatesForTrail(trailIdByCourseName("홍제동구간"), 30.0).size());
+        assertEquals(0, dao.findAccidentCandidatesForTrail(trailIdByCourseName("부암동구간"), 30.0).size());
+    }
+
+    @Test
+    void trailLevelResultsAreSortedByDistanceAscending() throws Exception {
+        ensureImported();
+        long trailId = trailIdByCourseName("무악동구간");
+
+        List<NearbyAccidentCandidateRow> results = dao.findAccidentCandidatesForTrail(trailId, 30.0);
+        assertEquals(2, results.size());
+        for (int i = 1; i < results.size(); i++) {
+            assertTrue(results.get(i - 1).getDistanceToTrailMeters() <= results.get(i).getDistanceToTrailMeters());
+        }
     }
 }

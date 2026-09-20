@@ -50,7 +50,7 @@ Frontend가 직접 fetch → 좌표 flatten → 지도에 렌더링
 | 2 | Raw / Network Layer 분리 | `TrailFeature`(Validated Raw)와 `TrailNode`/`TrailSegment`(`ST_Dump` + exact endpoint 매칭으로 파생된 Derived Network baseline)를 별개 계층으로 설계 |
 | 3 | AccidentPoint 독립 Raw Layer + 동적 공간관계 | 사고 42건을 FK 없이 `ST_DWithin`/`ST_Distance`로 TrailSegment와 질의 시점에 연결 |
 | 4 | 기존 기능 보호를 위한 Hybrid Migration | 데이터 정제가 기존 경사 렌더링 로직과 충돌하는 것을 발견하고, 안전한 화면만 먼저 DB API로 전환(Phase 9A) — 이후 대체 모델을 검증한 뒤 나머지 4개 화면도 전환(Phase 12D) |
-| 5 | Fresh Rebuild / Regression / Performance 검증 | 별도 DB에서 전체 파이프라인 재현 + 125개 자동 테스트 + 실측 성능 baseline 확보 |
+| 5 | Fresh Rebuild / Regression / Performance 검증 | 별도 DB에서 전체 파이프라인 재현 + 146개 자동 테스트 + 실측 성능 baseline 확보 |
 | 6 | Network 기반 20m 고정거리 SlopeSection 모델 | TrailSegment Network를 branch-free Chain으로 재구성해 DEM-derived DN 값을 선형보간, 좌표 개수 기반 청킹을 client-independent한 거리 기반 경사 분석으로 대체(`docs/09`) |
 
 ---
@@ -73,15 +73,20 @@ flowchart TD
         TNTS["TrailNode / TrailSegment<br/>(2526 / 2122)"]
     end
 
+    subgraph Analysis["Derived Analysis Layer (precomputed)"]
+        SS["slope_section<br/>(351건, window_m=20 고정)"]
+    end
+
     subgraph API["Backend API"]
         GJAPI["GET /api/spatial/trails/geojson"]
-        SQAPI["GET /api/spatial/accidents/{id}/nearby-segments<br/>GET /api/spatial/trail-segments/{id}/nearby-accidents"]
+        SQAPI["GET /api/spatial/accidents/{id}/nearby-segments<br/>GET /api/spatial/trail-segments/{id}/nearby-accidents<br/>GET /api/spatial/trails/{trailId}/nearby-accidents"]
         SSAPI["GET /api/spatial/trails/{trailId}/slope-sections<br/>?windowMeters=20"]
     end
 
     subgraph FE["Frontend"]
         Safe["non-slope 7개 화면<br/>(Preview/Community/Heatmap/People)"]
         SlopeFE["Slope 4개 화면<br/>(Base Trail Layer + 20m SlopeSection Overlay)"]
+        Record["RecordView<br/>(2초 위치 polling + Kakao distance 30m 음성 알림)"]
     end
 
     TG -- "Validation/Import, 13건 제외" --> TF
@@ -91,11 +96,14 @@ flowchart TD
     TF -- "source_feature_index ASC" --> GJAPI
     AP --- SQAPI
     TNTS --- SQAPI
-    TNTS -- "NetworkChain + ElevationProfile" --> SSAPI
+    TNTS -- "spatial-slope-build profile<br/>(NetworkChain + ElevationProfile, 1회성 배치)" --> SS
+    SS -- "SELECT only, 재계산 없음" --> SSAPI
     GJAPI --> Safe
     SQAPI -.-> Safe
     GJAPI -- "Base Trail" --> SlopeFE
     SSAPI -- "estimatedSlopePercent → color" --> SlopeFE
+    GJAPI -- "resolveAllTrailIds" --> Record
+    SQAPI -- "Trail 주변 후보 선별 (Phase 13)" --> Record
 ```
 
 **Legacy Compatibility Boundary는 해소됐다(Phase 12D)**: Phase 9A 당시에는 DB Validated
@@ -262,26 +270,39 @@ GET /api/spatial/trails/geojson
 ```text
 GET /api/spatial/accidents/{accidentId}/nearby-segments?distanceMeters=N
 GET /api/spatial/trail-segments/{segmentId}/nearby-accidents?distanceMeters=N
+GET /api/spatial/trails/{trailId}/nearby-accidents?distanceMeters=N
 ```
 `distanceMeters`는 **공간 연관 조회 반경**이며 "위험 반경"이 아니다 — 실측 결과 42건의 사고
 좌표 중 76%가 Trail Network에서 100m 이상 떨어져 있어, 특정 거리값을 위험/안전 기준으로 주장할
 근거가 없다(`docs/05-accident-spatial-query.md`).
 
+세 번째 API(Phase 13)는 Trail 하나의 모든 TrailSegment 기준으로 거리 내 AccidentPoint를 한 번에
+조회하고(accidentId 기준 dedup, `distanceToTrailMeters` 오름차순 GeoJSON `FeatureCollection<Point>`
+반환), `RecordView.vue`의 실시간 위험 음성 알림이 Legacy static GeoJSON(15건, 조작 데이터 포함)
+대신 이 API로 후보를 받도록 연결했다 — 실시간 사용자 위치와 후보의 거리 비교 자체는 여전히
+Frontend/Kakao Maps 계산이다(`docs/05-accident-spatial-query.md`, Phase 13 절).
+
 ### SlopeSection API — TrailSegment Network 기반 고정거리 경사 분석
 
 ```text
-GET /api/spatial/trails/{trailId}/slope-sections?windowMeters=10|20|30
+GET /api/spatial/trails/{trailId}/slope-sections?windowMeters=20
 ```
-- Source: `TrailFeature.dn_value`(DEM-derived 대표 elevation으로 알려진 미검증 값) +
-  `TrailSegment` Network를 branch-free Chain으로 재구성 → 고정거리(기본 20m) 구간별 선형
-  보간 경사(`estimatedSlopePercent`)
-- `windowMeters`는 10/20/30만 허용 — 임의 값(특히 1m 같은 짧은 값)은 baseline 노이즈를
-  재현하므로 막았다(`docs/09-slope-section-analysis.md`)
+- Source: `slope_section` — `TrailSegment` Network를 branch-free Chain으로 재구성해
+  `TrailFeature.dn_value`(DEM-derived 대표 elevation으로 알려진 미검증 값)를 선형보간한
+  20m 고정거리 구간(`estimatedSlopePercent`)을 **미리 계산해 저장한 Derived Analysis
+  Layer**다. 이 API는 요청마다 재계산하지 않고 `slope_section`을 조회만 한다
+  (`SlopeSectionService`, compute-on-request → precompute + persistence 전환,
+  `docs/09-slope-section-analysis.md`)
+- `windowMeters`는 **20만 허용** — `slope_section`이 20m만 영속화하기 때문이다
+  (10/30은 Phase 12A-12C 비교용 순수 계산 코드로만 남아있다)
+- 실제 갱신은 별도 `spatial-slope-build` profile(`SlopeSectionBuildService`)이 Network
+  Build 이후 명시적으로 실행해야 한다 — 애플리케이션 기동 시 자동으로 재계산되지 않는다
 - 4개 Legacy 경사 화면(`MountainDetailView.vue` 등)이 Phase 12D부터 이 API + Trail GeoJSON
   API를 Base+Overlay 구조로 함께 사용한다 — Frontend는 더 이상 좌표를 묶어 경사를 직접
   계산하지 않는다
 - 응답은 GeoJSON FeatureCollection이며 `estimatedElevationSource` 필드로 DN 출처(미검증
-  DEM-derived 값)를 매 응답에 명시한다
+  DEM-derived 값)를 매 응답에 명시한다 — 응답 shape 자체는 precompute 전환 전후 완전히
+  동일함을 실측 확인했다(바이트 단위로 동일한 payload, `docs/09`)
 
 ---
 
@@ -289,13 +310,17 @@ GET /api/spatial/trails/{trailId}/slope-sections?windowMeters=10|20|30
 
 | 항목 | 결과 |
 |---|---|
-| Backend 자동 테스트 | **125 / 125 PASS** |
+| Backend 자동 테스트 | **146 / 146 PASS** |
 | Frontend production build | PASS (신규 경고/에러 0건) |
 | Geometry integrity 위반(4개 테이블 전수) | **0건** |
 | Raw ↔ Network geometry parity | **2122 / 2122**, 길이차 **0m** |
-| Fresh Rebuild(별도 DB에서 전체 파이프라인 재구성) | Dataset 4/1706/2526/2122/42 **동일 재현** |
+| Fresh Rebuild(별도 DB에서 전체 파이프라인 재구성, Slope Build 포함) | Dataset 4/1706/2526/2122/42/**351** **동일 재현** |
 | Trail GeoJSON API(local, warmup 5회+측정 30회) | 458,796 bytes, **median 8.78ms, p95 10.51ms** |
-| SlopeSection API(20m, 마루/최대부하, warmup 5회+측정 30회) | **median ~60ms, p95 ~63ms**(`docs/09`) |
+| SlopeSection API(20m, 마루/최대부하, precompute 전환 후, warmup 5회+측정 30회) | **median ~9.5ms, p95 ~11.0ms**(전환 전 median ~48ms 대비, `docs/09`) |
+| SlopeSection precompute→persist 전환 전/후 응답 parity | 351건 전 필드/geometry **byte-identical** |
+| Frontend `trail_id` 하드코딩 제거 후 재검증 | 운영 DB(10/11/12/13)·별도 Fresh Rebuild DB(1/2/3/4) 양쪽에서 동일 Frontend 코드로 section 251/49/21/30 **동일 재현**(`docs/09` Phase 12F) |
+| Trail별 30m AccidentPoint 후보(운영 DB, Phase 13) | 마루 0 / 무악동구간 **2** / 홍제동구간 0 / 부암동구간 0 (`docs/05` Phase 13) |
+| AccidentPoint 후보 dedup 실측 | GROUP BY 이전 24행 → 이후 **1행**(동일 accidentId, MIN distance 유지) |
 
 - 위 API 응답시간은 **local Docker, localhost 환경**에서 측정한 값이며 production latency가
   아니다.
@@ -324,16 +349,25 @@ docker exec -i safety_hiking_postgis psql -U safety_hiking_app -d safety_hiking 
   < backend/src/main/resources/db/postgis/network-schema.sql
 docker exec -i safety_hiking_postgis psql -U safety_hiking_app -d safety_hiking \
   < backend/src/main/resources/db/postgis/accident-schema.sql
+docker exec -i safety_hiking_postgis psql -U safety_hiking_app -d safety_hiking \
+  < backend/src/main/resources/db/postgis/slope-section-schema.sql
 
-# 3) 공간 데이터 Import (one-shot batch, 각 profile 실행 후 종료됨)
+# 3) 공간 데이터 Import + Derived Layer Build (one-shot batch, 각 profile 실행 후 종료됨)
+# 순서 중요: Slope Build는 반드시 Network Build 이후에 실행한다(SlopeSection이
+# trail_segment/trail_node에서 파생되기 때문 -- docs/09 참고).
 cd backend
 SPRING_PROFILES_ACTIVE=spatial-import ./mvnw spring-boot:run
 SPRING_PROFILES_ACTIVE=spatial-network-build ./mvnw spring-boot:run
 SPRING_PROFILES_ACTIVE=spatial-accident-import ./mvnw spring-boot:run
+SPRING_PROFILES_ACTIVE=spatial-slope-build ./mvnw spring-boot:run
 
 # 4) Backend 실행
 ./mvnw spring-boot:run
 # → GET http://localhost:9000/api/spatial/trails/geojson 로 1706 Feature 확인 가능
+#   (각 Feature.properties.trailId가 현재 DB의 실제 trail.id다 -- surrogate PK라서
+#   Import 때마다 달라질 수 있으므로, 아래 예시의 10은 그 중 하나일 뿐이다)
+# → GET http://localhost:9000/api/spatial/trails/10/slope-sections?windowMeters=20 로
+#   precomputed SlopeSection(총 351건) 확인 가능 (로컬 최초 Import 시 마루=10인 경우의 예시)
 
 # 5) Frontend 실행 (별도 터미널)
 cd frontend
@@ -343,7 +377,9 @@ npm run serve
 ```
 
 이 순서는 Phase 10에서 별도 임시 DB(`safety_hiking_bench`)에 실제로 적용해 Dataset
-(4/1706/2526/2122/42)과 API가 동일하게 재현됨을 확인한 순서다(`docs/07`).
+(4/1706/2526/2122/42)과 API가 동일하게 재현됨을 확인한 순서다(`docs/07`). Slope Build
+단계는 이후 추가됐고, 동일 방식(별도 임시 DB)으로 재현 검증해 `slope_section=351`
+(Trail별 251/49/21/30)까지 동일하게 재현됨을 확인했다(`docs/09`).
 
 ---
 

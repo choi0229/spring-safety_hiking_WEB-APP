@@ -76,6 +76,8 @@ import { ref, reactive, computed, onMounted, onBeforeUnmount } from 'vue';
 import axios from 'axios';
 import router from '@/router';
 import { Modal } from "bootstrap";
+import { fetchTrailGeoJson, resolveAllTrailIds } from '@/api/slopeSection.js';
+import { fetchNearbyAccidents } from '@/api/accidentCandidates.js';
 
 // 위치 상태 관리
 const latitude = ref(37.641774041520812);
@@ -97,8 +99,14 @@ const isTrackingComplete = ref(false); // 기록 저장 버튼 활성화 상태
 
 // 음성
 const message = ref('30m 앞에 위험 구간입니다. 주의하세요.');
-const triggeredMarkers = new Set(); // 경고가 이미 발생한 마커 ID를 저장하는 Set
+const triggeredAccidentIds = new Set(); // 경고가 이미 발생한 accident_point.id를 저장하는 Set
 const isVoiceLoaded = ref(false); // 스크립트 로드 상태 추적
+
+// Phase 13: 값은 현재 둘 다 30m이지만 의미가 다르다 -- 값이 같다고 하나로 합치지 않는다.
+// ACCIDENT_CANDIDATE_DISTANCE_METERS: Trail ↔ AccidentPoint (PostGIS 후보 선별 반경, Backend)
+// ACCIDENT_ALERT_DISTANCE_METERS: User ↔ AccidentPoint (실시간 알림 판정 반경, Frontend)
+const ACCIDENT_CANDIDATE_DISTANCE_METERS = 30;
+const ACCIDENT_ALERT_DISTANCE_METERS = 30;
 
 // 지도 초기화 함수
 function initializeMap() {
@@ -119,7 +127,7 @@ function initializeMap() {
                 // 점 및 경로 표시 초기화
                 initOverlays();
                 initPolyline();
-                loadDangerMarkers("/data/2023산악사고_인왕산2.geojson", '/images/danger.png');
+                loadAccidentCandidateMarkers();
                 // 지도 로드 후에 위치 업데이트
                 if (latitude.value && longitude.value) {
                     console.log('실행');
@@ -144,16 +152,15 @@ function calculateDistanceUsingPolyline(userPosition, dangerPosition) {
 function checkProximityUsingPolyline(userPosition) {
   console.log("Checking proximity for position:", userPosition); // 확인 로그
   dangerMarkers.value.forEach((dangerMarker) => {
+    const accidentId = dangerMarker.id; // Phase 13: accident_point.id (좌표 문자열 대신)
+    if (triggeredAccidentIds.has(accidentId)) return;
+
     const markerPosition = dangerMarker.getPosition();
-    const markerId = `${markerPosition.getLat()},${markerPosition.getLng()}`;
-
-    if (triggeredMarkers.has(markerId)) return;
-
     const distance = calculateDistanceUsingPolyline(userPosition, markerPosition);
-    if (distance <= 30) {
+    if (distance <= ACCIDENT_ALERT_DISTANCE_METERS) {
       console.log('위험 구역 접근:', dangerMarker.getTitle());
       speakMessage();
-      triggeredMarkers.add(markerId);
+      triggeredAccidentIds.add(accidentId);
     }
   });
 }
@@ -184,67 +191,63 @@ function speakMessage() {
 
 const dangerMarkers = ref([]);  // 위험구역 마커 목록을 저장할 ref 변수 (삭제되지 않음)
 
-// JSON 데이터를 사용하여 위험 마커 추가
-async function loadDangerMarkers(url, imageSrc) {
+// Phase 13: 실제 PostGIS accident_point(42건) 기반 위험 마커.
+// 이 화면은 별도 코스 선택 UI가 없으므로(§14/§15 분석 결과, RecordView에는 현재 코스를
+// 식별할 방법이 없음) MountainDetailView2.vue와 동일한 패턴으로 Trail GeoJSON에 실제
+// 존재하는 trailId 전체를 순회한다 -- 코스명을 임의로 추정하거나 하드코딩하지 않는다.
+// Trail ↔ AccidentPoint 공간관계(후보 선별)는 Backend/PostGIS가 계산하고, 이 함수는 그
+// 결과를 지도에 그리기만 한다 -- 실시간 사용자 접근 판정은 여전히 checkProximityUsingPolyline
+// (Frontend/Kakao 거리 계산)이 담당한다.
+async function loadAccidentCandidateMarkers() {
   try {
-    const response = await fetch(url); // JSON 파일에서 마커 정보를 가져오기
-    if (!response.ok) {
-      throw new Error(`HTTP error! status: ${response.status}`);
-    }
-    const markerData = await response.json();
-    console.log(`${url} 마커 데이터 로드 성공:`, markerData);
+    const trailGeoJson = await fetchTrailGeoJson();
+    const trailIds = resolveAllTrailIds(trailGeoJson);
 
     const imageSize = new kakao.maps.Size(35, 45);
     const imageOpation = { offset: new kakao.maps.Point(12, 35) };
-    const markerImage = new kakao.maps.MarkerImage(imageSrc, imageSize, imageOpation);
+    const markerImage = new kakao.maps.MarkerImage('/images/danger.png', imageSize, imageOpation);
 
-    // GeoJSON 데이터의 features 배열에서 마커 추가
-    markerData.features.forEach((spot) => {
-      const lat = spot.geometry.coordinates[1]; // 위도
-      const lng = spot.geometry.coordinates[0]; // 경도
-      const markerPosition = new kakao.maps.LatLng(lat, lng); // 마커 좌표
+    // 같은 사고지점이 여러 Trail의 후보로 동시에 나올 수 있으므로 accidentId로 한 번 더
+    // 중복 제거한다 (Backend는 Trail 하나 안에서의 중복만 제거함, §7/§30).
+    const candidatesByAccidentId = new Map();
+    for (const trailId of trailIds) {
+      try {
+        const candidateGeoJson = await fetchNearbyAccidents(trailId, ACCIDENT_CANDIDATE_DISTANCE_METERS);
+        candidateGeoJson.features.forEach((feature) => {
+          candidatesByAccidentId.set(feature.properties.accidentId, feature);
+        });
+      } catch (error) {
+        // 한 Trail의 후보 조회 실패가 나머지 Trail/지도 렌더링까지 막지 않는다 (§36).
+        console.error(`사고지점 후보 조회 중 에러 발생 (trailId=${trailId}):`, error);
+      }
+    }
 
-      // 마커 생성
+    candidatesByAccidentId.forEach((feature) => {
+      const [lng, lat] = feature.geometry.coordinates;
+      const { accidentId, accidentType, locationName, dispatchDate, distanceToTrailMeters } = feature.properties;
+      const markerPosition = new kakao.maps.LatLng(lat, lng);
+
       const marker = new kakao.maps.Marker({
-        position: markerPosition, // 마커 위치
-        map: map, // 마커를 표시할 지도 객체
-        title: spot.properties.MNTN_NM, // 마커 제목
+        position: markerPosition,
+        map: map,
+        title: accidentType,
         image: markerImage,
-        id: `${lat},${lng}`, // 마커의 고유 ID로 좌표 사용
       });
-
-      // 위험구역 마커를 dangerMarkers에 추가
+      // Kakao Marker 생성자는 인식하지 못하는 옵션을 저장한다는 보장이 없으므로, 생성 후
+      // 일반 프로퍼티로 직접 부여한다 (Legacy 코드의 `id:` 생성자 옵션은 실제로는 어디서도
+      // 읽히지 않는 죽은 코드였다 -- checkProximityUsingPolyline은 좌표를 재계산해서 썼다).
+      marker.id = accidentId; // Phase 13: accident_point.id -- 중복 알림 방지 식별자
       dangerMarkers.value.push(marker);
 
-      // 마커에 대한 정보창 추가
       const infowindow = new kakao.maps.InfoWindow({
-        content: `<div style="padding:5px;">${spot.properties.MNTN_NM}<br>${spot.properties.SAFE_SPOT2}</div>`, // 정보창 내용
+        content: `<div style="padding:5px;">${accidentType}<br>${locationName} (${dispatchDate})<br>등산로에서 약 ${distanceToTrailMeters.toFixed(1)}m</div>`,
       });
-
-      // 마커에 마우스오버 이벤트 등록
-      kakao.maps.event.addListener(marker, 'mouseover', () => infowindow.open(map.value, marker));
+      kakao.maps.event.addListener(marker, 'mouseover', () => infowindow.open(map, marker));
       kakao.maps.event.addListener(marker, 'mouseout', () => infowindow.close());
     });
-
-    // 추가 좌표 (예시: 37.5677020596, 126.82765689400)
-    // 추가 좌표 (예시: 37.56883961294, 126.8310780462)
-    const extraLat = 37.515772995522;
-    const extraLng = 127.03493276089;
-    const extraMarkerPosition = new kakao.maps.LatLng(extraLat, extraLng);
-    
-    const extraMarker = new kakao.maps.Marker({
-      position: extraMarkerPosition,
-      map: map,
-      title: "추가 위험 지역",
-      image: markerImage,
-      id: `${extraLat},${extraLng}`,
-    });
-
-    // 추가 마커 dangerMarkers 목록에 추가
-    dangerMarkers.value.push(extraMarker);
-    //마커 추가 끝
   } catch (error) {
-    console.error(`${url} 파일 로드 중 에러 발생:`, error);
+    // Trail GeoJSON 자체 로드 실패 -- 위험 마커/알림만 생략되고 나머지 Record 기능은 그대로 동작한다.
+    console.error('사고지점 후보 마커 로드 중 에러 발생:', error);
   }
 }
 

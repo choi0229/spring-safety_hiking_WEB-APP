@@ -17,7 +17,7 @@ import { onMounted, ref } from 'vue';
 import Chart from 'chart.js/auto';
 import axios from "axios";
 import {
-  TRAIL_ID_BY_COURSE_NAME,
+  resolveAllTrailIds,
   SLOPE_WINDOW_METERS,
   getEstimatedSlopeColor,
   fetchTrailGeoJson,
@@ -150,7 +150,7 @@ function processGeoJSON(geojsonData) {
   if (allCoordinates.length > 0) {
     addRouteLayer(allCoordinates);
     drawElevationChart(allCoordinates);
-    renderSlopeOverlay(); // Phase 12D: 20m SlopeSection Backend API 기반 경사 Overlay
+    renderSlopeOverlay(geojsonData); // Phase 12D: 20m SlopeSection Backend API 기반 경사 Overlay
   } else {
     console.log('유효한 구간 데이터가 없습니다.');
   }
@@ -169,15 +169,16 @@ function addRouteLayer(coordinates) {
 }
 
 // Phase 12D: 20m SlopeSection Backend API 기반 경사 Overlay. 이 화면은 특정 코스를
-// 선택하지 않고 전체 Trail을 한 번에 보여주므로(§ PMNTN_NM 필터가 사실상 no-op), 알려진
-// 4개 Trail 전체의 SlopeSection을 모두 같은 지도에 겹쳐 그린다.
+// 선택하지 않고 전체 Trail을 한 번에 보여주므로(§ PMNTN_NM 필터가 사실상 no-op), Trail
+// GeoJSON 응답에 실제로 존재하는 trailId 전체를 그대로 읽어 그 Trail들의 SlopeSection을
+// 모두 같은 지도에 겹쳐 그린다 -- trail.id는 surrogate PK이므로 하드코딩된 목록을 쓰지 않는다.
 let slopeOverlayPolylines = [];
 
-async function renderSlopeOverlay() {
+async function renderSlopeOverlay(trailGeoJson) {
   slopeOverlayPolylines.forEach((polyline) => polyline.setMap(null));
   slopeOverlayPolylines = [];
 
-  for (const trailId of Object.values(TRAIL_ID_BY_COURSE_NAME)) {
+  for (const trailId of resolveAllTrailIds(trailGeoJson)) {
     try {
       const slopeGeoJson = await fetchSlopeSections(trailId, SLOPE_WINDOW_METERS);
       slopeGeoJson.features.forEach((feature) => {

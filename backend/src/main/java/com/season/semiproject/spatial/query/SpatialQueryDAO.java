@@ -22,6 +22,10 @@ public class SpatialQueryDAO {
         return session.selectOne("countSegmentById", segmentId);
     }
 
+    public int countTrailById(long trailId) {
+        return session.selectOne("countTrailForNearbyAccidents", trailId);
+    }
+
     /** Exhaustive within-threshold search -- no KNN LIMIT shortcut (see mapper-spatial-query.xml). */
     public List<NearbySegmentRow> findSegmentsNearAccident(Long accidentId, double distanceMeters) {
         Map<String, Object> params = new HashMap<>();
@@ -36,5 +40,14 @@ public class SpatialQueryDAO {
         params.put("segmentId", segmentId);
         params.put("distanceMeters", distanceMeters);
         return session.selectList("findAccidentsNearSegment", params);
+    }
+
+    /** One row per distinct accidentId within distanceMeters of ANY TrailSegment of this Trail --
+     * dedup and MIN(distance) both happen in SQL (see mapper-spatial-query.xml), not here. */
+    public List<NearbyAccidentCandidateRow> findAccidentCandidatesForTrail(long trailId, double distanceMeters) {
+        Map<String, Object> params = new HashMap<>();
+        params.put("trailId", trailId);
+        params.put("distanceMeters", distanceMeters);
+        return session.selectList("findAccidentCandidatesForTrail", params);
     }
 }

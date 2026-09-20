@@ -18,6 +18,11 @@
   COALESCE around json_agg(...) is required: PostgreSQL's json_agg over zero input rows returns
   SQL NULL (a query with an aggregate and no GROUP BY still returns exactly one row), which would
   otherwise produce {"type":"FeatureCollection","features":null} instead of an empty array.
+
+  properties.trailId is t.id, the surrogate primary key of `trail`; it is not stable across a
+  Fresh Rebuild (see docs/09-slope-section-analysis.md, "trail.id is a surrogate PK"), so it exists
+  here so the Frontend can resolve the current database's id for a course at load time instead of
+  hardcoding one. Added alongside the pre-existing PMNTN_NM/DN properties without changing either.
 -->
 <mapper namespace="mapper-trail-geojson">
 
@@ -29,7 +34,8 @@
 					'type', 'Feature',
 					'properties', json_build_object(
 						'PMNTN_NM', t.source_course_name,
-						'DN', tf.dn_value
+						'DN', tf.dn_value,
+						'trailId', t.id
 					),
 					'geometry', ST_AsGeoJSON(tf.geom, 15)::json
 				) ORDER BY tf.source_feature_index

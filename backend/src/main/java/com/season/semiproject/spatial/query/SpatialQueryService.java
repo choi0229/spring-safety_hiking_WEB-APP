@@ -3,6 +3,10 @@ package com.season.semiproject.spatial.query;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+
+import java.util.ArrayList;
 import java.util.List;
 
 /**
@@ -15,6 +19,7 @@ import java.util.List;
 public class SpatialQueryService {
 
     private final SpatialQueryDAO dao;
+    private final ObjectMapper objectMapper = new ObjectMapper();
 
     @Autowired
     public SpatialQueryService(SpatialQueryDAO dao) {
@@ -29,11 +34,40 @@ public class SpatialQueryService {
         return dao.countSegmentById(segmentId) > 0;
     }
 
+    public boolean trailExists(long trailId) {
+        return dao.countTrailById(trailId) > 0;
+    }
+
     public List<NearbySegmentRow> findSegmentsNearAccident(Long accidentId, double distanceMeters) {
         return dao.findSegmentsNearAccident(accidentId, distanceMeters);
     }
 
     public List<NearbyAccidentRow> findAccidentsNearSegment(Long segmentId, double distanceMeters) {
         return dao.findAccidentsNearSegment(segmentId, distanceMeters);
+    }
+
+    /** "API C": one Trail -> every distinct AccidentPoint within distanceMeters of any of its
+     * TrailSegments, as a GeoJSON FeatureCollection<Point>. See mapper-spatial-query.xml,
+     * findAccidentCandidatesForTrail, for the dedup/MIN(distance) SQL this reads. */
+    public AccidentCandidateFeatureCollection findAccidentCandidatesForTrail(long trailId, double distanceMeters) {
+        List<NearbyAccidentCandidateRow> rows = dao.findAccidentCandidatesForTrail(trailId, distanceMeters);
+
+        List<AccidentCandidateFeature> features = new ArrayList<>(rows.size());
+        for (NearbyAccidentCandidateRow row : rows) {
+            JsonNode geometry = parseGeometry(row.getGeometryGeoJson());
+            AccidentCandidateProperties properties = new AccidentCandidateProperties(
+                    row.getAccidentId(), row.getReportNo(), row.getDispatchDate(),
+                    row.getAccidentType(), row.getLocationName(), row.getDistanceToTrailMeters());
+            features.add(new AccidentCandidateFeature(properties, geometry));
+        }
+        return new AccidentCandidateFeatureCollection(trailId, distanceMeters, features);
+    }
+
+    private JsonNode parseGeometry(String geoJson) {
+        try {
+            return objectMapper.readTree(geoJson);
+        } catch (Exception e) {
+            throw new IllegalStateException("Invalid geometry GeoJSON stored in accident_point: " + geoJson, e);
+        }
     }
 }

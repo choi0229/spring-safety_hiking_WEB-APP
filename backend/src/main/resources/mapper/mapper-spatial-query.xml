@@ -25,6 +25,13 @@
 		SELECT COUNT(*) FROM trail_segment WHERE id = #{value}
 	</select>
 
+	<!-- Named countTrailForNearbyAccidents, not countTrailById: MyBatis statement ids must be
+	     unique across ALL mappers when called unqualified (see SpatialQueryDAO), and
+	     mapper-slope-section.xml already defines its own countTrailById. -->
+	<select id="countTrailForNearbyAccidents" parameterType="long" resultType="int">
+		SELECT COUNT(*) FROM trail WHERE id = #{value}
+	</select>
+
 	<!-- API A: one Accident -> every TrailSegment within distanceMeters, nearest first. -->
 	<select id="findSegmentsNearAccident" resultType="com.season.semiproject.spatial.query.NearbySegmentRow">
 		SELECT
@@ -56,6 +63,29 @@
 			ON ST_DWithin(a.geom::geography, ts.geom::geography, #{distanceMeters})
 		WHERE ts.id = #{segmentId}
 		ORDER BY ST_Distance(a.geom::geography, ts.geom::geography) ASC
+	</select>
+
+	<!-- API C (Phase 13): one Trail -> every DISTINCT AccidentPoint within distanceMeters of any
+	     of its TrailSegments, nearest first. GROUP BY a.id both dedups (an Accident near several
+	     Segments of the same Trail must appear once) and keeps the MIN Segment distance for that
+	     Accident (see docs/05-accident-spatial-query.md, Phase 13 section, for why this is a
+	     Trail<->AccidentPoint distance, never the live user<->AccidentPoint distance). -->
+	<select id="findAccidentCandidatesForTrail" resultType="com.season.semiproject.spatial.query.NearbyAccidentCandidateRow">
+		SELECT
+			a.id AS accidentId,
+			a.report_no AS reportNo,
+			a.dispatch_date AS dispatchDate,
+			a.accident_type AS accidentType,
+			a.location_name AS locationName,
+			ST_AsGeoJSON(a.geom) AS geometryGeoJson,
+			MIN(ST_Distance(a.geom::geography, ts.geom::geography)) AS distanceToTrailMeters
+		FROM accident_point a
+		JOIN trail_segment ts
+			ON ST_DWithin(a.geom::geography, ts.geom::geography, #{distanceMeters})
+		JOIN trail_feature tf ON tf.id = ts.source_trail_feature_id
+		WHERE tf.trail_id = #{trailId}
+		GROUP BY a.id
+		ORDER BY distanceToTrailMeters ASC
 	</select>
 
 </mapper>

@@ -1,34 +1,39 @@
 package com.season.semiproject.spatial.slope;
 
 import java.util.ArrayList;
-import java.util.HashMap;
 import java.util.List;
-import java.util.Map;
 import java.util.Set;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.databind.node.ArrayNode;
-import com.fasterxml.jackson.databind.node.ObjectNode;
 
 /**
- * Phase 12B/12C: Network-based fixed-distance SlopeSection model, compute-on-request (no
- * persistence -- see docs/09-slope-section-analysis.md, "storage model" comparison). Never
- * touches trail_segment/trail_node; only reads them.
+ * Production API read path for the SlopeSection Derived Analysis Layer: a plain
+ * {@code SELECT ... FROM slope_section} plus GeoJSON assembly, nothing else. No
+ * NetworkChainBuilder/ElevationProfile/SlopeSectionCalculator/ChainDistanceLocator call happens
+ * here anymore -- SlopeSection is precomputed by {@link SlopeSectionBuildService} (the
+ * `spatial-slope-build` profile) and this class only queries what that build already persisted.
+ * See docs/09-slope-section-analysis.md for why this moved from compute-on-request to
+ * precompute + persistence.
  *
- * Section geometry is cut per-Segment (Phase 12C), not by one global fraction over the whole
- * merged chain (Phase 12B) -- see {@link ChainDistanceLocator} for why: cutting one short,
- * nearly-straight Segment at a time keeps the geometry-fraction/geography-distance mismatch
- * negligible, where cutting the whole chain at once let it grow to double digits of percent on
- * long chains (measured on the real dataset, see docs/09).
+ * Deliberately never falls back to computing on a cache miss (see docs/09, "No Runtime
+ * Fallback") -- an empty result here means either a Trail with no SlopeSection coverage (the
+ * pre-existing, expected meaning) or the Slope build has not been run yet; {@link #getSlopeSections}
+ * logs a warning to make the latter case discoverable in ops without changing the API response.
  */
 @Service
 public class SlopeSectionService {
 
-    public static final Set<Integer> ALLOWED_WINDOW_METERS = Set.of(10, 20, 30);
+    private static final Logger log = LoggerFactory.getLogger(SlopeSectionService.class);
+
+    /** Production only ever persists {@value SlopeSectionBuildService#PRODUCTION_WINDOW_METERS}m
+     * -- see slope-section-schema.sql, chk_slope_section_window_m. */
+    public static final Set<Integer> ALLOWED_WINDOW_METERS = Set.of(SlopeSectionBuildService.PRODUCTION_WINDOW_METERS);
 
     private final SlopeSectionDAO dao;
     private final ObjectMapper objectMapper = new ObjectMapper();
@@ -42,122 +47,31 @@ public class SlopeSectionService {
         return dao.countTrailById(trailId) > 0;
     }
 
-    public SlopeSectionFeatureCollection computeSlopeSections(long trailId, int windowMeters) {
-        List<TrailSegmentElevationRow> rows = dao.findSegmentsForTrail(trailId);
-        List<NetworkChain> chains = NetworkChainBuilder.buildChains(rows);
-        Map<Integer, NetworkChain> chainByIndex = new HashMap<>();
-        for (NetworkChain chain : chains) {
-            chainByIndex.put(chain.getChainIndex(), chain);
+    public SlopeSectionFeatureCollection getSlopeSections(long trailId, int windowMeters) {
+        List<SlopeSectionRow> rows = dao.findPersistedSections(trailId, windowMeters);
+        if (rows.isEmpty()) {
+            log.warn("No persisted SlopeSection rows for trailId={} windowMeters={} -- if this is "
+                    + "unexpected, run the spatial-slope-build profile (see docs/09-slope-section-analysis.md)",
+                    trailId, windowMeters);
         }
 
-        List<SlopeSectionResult> allResults = new ArrayList<>();
-        for (NetworkChain chain : chains) {
-            allResults.addAll(SlopeSectionCalculator.computeSections(chain, windowMeters));
-        }
-
-        List<SectionCutRequest> cutRequests = new ArrayList<>();
-        Map<Integer, List<Piece>> piecesBySection = new HashMap<>();
-        for (int sectionIdx = 0; sectionIdx < allResults.size(); sectionIdx++) {
-            SlopeSectionResult r = allResults.get(sectionIdx);
-            NetworkChain chain = chainByIndex.get(r.getChainIndex());
-            piecesBySection.put(sectionIdx, buildPieces(chain, r.getChainStartMeters(), r.getChainEndMeters(), cutRequests));
-        }
-
-        Map<Integer, String> cutGeometryByRequestIdx = new HashMap<>();
-        for (SectionCutResultRow row : dao.cutSections(cutRequests)) {
-            cutGeometryByRequestIdx.put(row.getIdx(), row.getGeometryGeoJson());
-        }
-
-        List<SlopeSectionFeature> features = new ArrayList<>(allResults.size());
-        for (int sectionIdx = 0; sectionIdx < allResults.size(); sectionIdx++) {
-            SlopeSectionResult r = allResults.get(sectionIdx);
-            List<double[]> coordinates = assembleCoordinates(piecesBySection.get(sectionIdx), cutGeometryByRequestIdx);
-            if (coordinates.size() < 2) {
-                // Defensive only: every requested piece resolves to a matching row.
-                continue;
-            }
-            JsonNode geometry = buildLineStringNode(coordinates);
+        List<SlopeSectionFeature> features = new ArrayList<>(rows.size());
+        for (SlopeSectionRow row : rows) {
+            JsonNode geometry = parseGeometry(row.getGeometryGeoJson());
             SlopeSectionProperties properties = new SlopeSectionProperties(
-                    r.getChainIndex(), r.getSectionIndex(), r.getDistanceMeters(),
-                    r.getEstimatedElevationStart(), r.getEstimatedElevationEnd(), r.getEstimatedElevationDelta(),
-                    r.getEstimatedSlopePercent(), r.isPartialSection() ? "PARTIAL_SECTION" : null);
+                    row.getChainSequence(), row.getSectionSequence(), row.getDistanceM(),
+                    row.getEstimatedElevationStart(), row.getEstimatedElevationEnd(), row.getEstimatedElevationDelta(),
+                    row.getEstimatedSlopePercent(), row.getDataQualityFlag());
             features.add(new SlopeSectionFeature(properties, geometry));
         }
-
         return new SlopeSectionFeatureCollection(trailId, windowMeters, features);
     }
 
-    /** One piece of a SlopeSection's geometry: either a whole Segment's coordinates (no DB round
-     * trip needed) or a pending per-Segment {@code ST_LineSubstring} cut, resolved later via
-     * {@code cutRequestIdx} into {@code cutGeometryByRequestIdx}. */
-    private static final class Piece {
-        final Integer cutRequestIdx;
-        final List<double[]> fullCoordinates;
-
-        Piece(Integer cutRequestIdx, List<double[]> fullCoordinates) {
-            this.cutRequestIdx = cutRequestIdx;
-            this.fullCoordinates = fullCoordinates;
+    private JsonNode parseGeometry(String geoJson) {
+        try {
+            return objectMapper.readTree(geoJson);
+        } catch (Exception e) {
+            throw new IllegalStateException("Invalid geometry GeoJSON stored in slope_section: " + geoJson, e);
         }
-    }
-
-    private List<Piece> buildPieces(NetworkChain chain, double startMeters, double endMeters,
-            List<SectionCutRequest> cutRequests) {
-        List<ChainSegmentUsage> segments = chain.getSegments();
-        ChainDistanceLocator.LocatedPoint start = ChainDistanceLocator.locateStart(chain, startMeters);
-        ChainDistanceLocator.LocatedPoint end = ChainDistanceLocator.locateEnd(chain, endMeters);
-
-        List<Piece> pieces = new ArrayList<>();
-        if (start.usageIndex() == end.usageIndex()) {
-            pieces.add(cutPiece(segments.get(start.usageIndex()), start.localFraction(), end.localFraction(), cutRequests));
-            return pieces;
-        }
-
-        pieces.add(cutPiece(segments.get(start.usageIndex()), start.localFraction(), 1.0, cutRequests));
-        for (int i = start.usageIndex() + 1; i < end.usageIndex(); i++) {
-            pieces.add(new Piece(null, segments.get(i).getOrientedCoordinates()));
-        }
-        pieces.add(cutPiece(segments.get(end.usageIndex()), 0.0, end.localFraction(), cutRequests));
-        return pieces;
-    }
-
-    private static final double FRACTION_EPS = 1e-6;
-
-    private Piece cutPiece(ChainSegmentUsage usage, double fromFraction, double toFraction,
-            List<SectionCutRequest> cutRequests) {
-        if (fromFraction <= FRACTION_EPS && toFraction >= 1.0 - FRACTION_EPS) {
-            return new Piece(null, usage.getOrientedCoordinates());
-        }
-        String wkt = GeoJsonLineStringParser.toWkt(usage.getOrientedCoordinates());
-        int idx = cutRequests.size();
-        cutRequests.add(new SectionCutRequest(idx, wkt, fromFraction, toFraction));
-        return new Piece(idx, null);
-    }
-
-    private List<double[]> assembleCoordinates(List<Piece> pieces, Map<Integer, String> cutGeometryByRequestIdx) {
-        List<double[]> merged = new ArrayList<>();
-        for (Piece piece : pieces) {
-            List<double[]> coords = piece.fullCoordinates != null
-                    ? piece.fullCoordinates
-                    : GeoJsonLineStringParser.parseLineString(cutGeometryByRequestIdx.get(piece.cutRequestIdx));
-            int startIdx = merged.isEmpty() ? 0 : 1;
-            for (int i = startIdx; i < coords.size(); i++) {
-                merged.add(coords.get(i));
-            }
-        }
-        return merged;
-    }
-
-    private JsonNode buildLineStringNode(List<double[]> coordinates) {
-        ObjectNode node = objectMapper.createObjectNode();
-        node.put("type", "LineString");
-        ArrayNode coordsArray = objectMapper.createArrayNode();
-        for (double[] pt : coordinates) {
-            ArrayNode pair = objectMapper.createArrayNode();
-            pair.add(pt[0]);
-            pair.add(pt[1]);
-            coordsArray.add(pair);
-        }
-        node.set("coordinates", coordsArray);
-        return node;
     }
 }

@@ -985,7 +985,7 @@ const requestCourse = async () => {
       addRouteLayer(allCoordinates, targetMap);
       drawElevationChart(allCoordinates);
       if (targetMap === map.value) {
-        renderSlopeOverlay(targetMap); // Phase 12D: 20m SlopeSection Backend API 기반 경사 Overlay
+        renderSlopeOverlay(targetMap, geojsonData); // Phase 12D: 20m SlopeSection Backend API 기반 경사 Overlay
       }
     } else {
       console.log('유효한 구간 데이터가 없습니다.');
@@ -1031,17 +1031,12 @@ function addRouteLayer(coordinates, targetMap) {
 // 보이며, 이 함수는 그 구간에 임의로 slope=0을 채우지 않는다 -- Feature를 아예 그리지 않는다.
 let slopeOverlayPolylines = [];
 
-async function renderSlopeOverlay(targetMap) {
+async function renderSlopeOverlay(targetMap, trailGeoJson) {
   slopeOverlayPolylines.forEach((polyline) => polyline.setMap(null));
   slopeOverlayPolylines = [];
 
-  const trailId = resolveTrailId(courseData.value.courseName);
-  if (!trailId) {
-    console.error('SlopeSection Trail ID를 찾을 수 없는 코스명입니다:', courseData.value.courseName);
-    return;
-  }
-
   try {
+    const trailId = resolveTrailId(courseData.value.courseName, trailGeoJson);
     const slopeGeoJson = await fetchSlopeSections(trailId, SLOPE_WINDOW_METERS);
     slopeGeoJson.features.forEach((feature) => {
       const color = getEstimatedSlopeColor(feature.properties.estimatedSlopePercent);

@@ -1,5 +1,6 @@
 package com.season.semiproject.spatial.slope;
 
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
@@ -16,7 +17,11 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 /**
  * MockMvc-level contract test for GET /api/spatial/trails/{trailId}/slope-sections, run against
- * the real Docker PostgreSQL/PostGIS instance and the actual imported data (Phase 12B).
+ * the real Docker PostgreSQL/PostGIS instance and the actual imported data. The API now serves
+ * precomputed `slope_section` rows (see docs/09-slope-section-analysis.md) -- this class ensures
+ * a build has run before asserting on response content, and confirms the Production contract is
+ * unchanged from the consumer's point of view (same response shape as compute-on-request) while
+ * only windowMeters=20 is accepted now.
  */
 @SpringBootTest
 @AutoConfigureMockMvc
@@ -24,6 +29,14 @@ class SlopeSectionApiTest {
 
     @Autowired
     private MockMvc mockMvc;
+
+    @Autowired
+    private SlopeSectionBuildService buildService;
+
+    @BeforeEach
+    void ensureBuilt() {
+        buildService.buildAll();
+    }
 
     @Test
     void validWindowReturnsFeatureCollectionWithExpectedShape() throws Exception {
@@ -44,17 +57,26 @@ class SlopeSectionApiTest {
     }
 
     @Test
-    void allThreeAllowedWindowsAreAccepted() throws Exception {
-        for (String window : new String[] { "10", "20", "30" }) {
+    void windowMeters20IsAccepted() throws Exception {
+        mockMvc.perform(get("/api/spatial/trails/13/slope-sections").param("windowMeters", "20"))
+                .andExpect(status().isOk());
+    }
+
+    @Test
+    void windowMeters10And30AreNoLongerAcceptedByTheProductionApi() throws Exception {
+        // Persistence deliberately only ever stores window_m=20 (see slope-section-schema.sql,
+        // chk_slope_section_window_m). Accepting 10/30 here again would silently reintroduce a
+        // mixed-semantics API ("20 -> DB read, 10/30 -> some other computation") that Phase 12E
+        // explicitly avoided -- so both must now be rejected the same way any other invalid
+        // windowMeters value is.
+        for (String window : new String[] { "10", "30" }) {
             mockMvc.perform(get("/api/spatial/trails/13/slope-sections").param("windowMeters", window))
-                    .andExpect(status().isOk());
+                    .andExpect(status().isBadRequest());
         }
     }
 
     @Test
     void disallowedWindowValueIsRejectedWithBadRequest() throws Exception {
-        // Phase 12A found the short-baseline noise problem at ~1-5m; the API deliberately does
-        // not accept arbitrary windowMeters to avoid reintroducing it (see docs/09).
         mockMvc.perform(get("/api/spatial/trails/13/slope-sections").param("windowMeters", "1"))
                 .andExpect(status().isBadRequest());
     }

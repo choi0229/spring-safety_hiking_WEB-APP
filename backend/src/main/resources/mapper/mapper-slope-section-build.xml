@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<!--
+  Slope Build (Derived Analysis Layer precompute). Used only by
+  com.season.semiproject.spatial.slope.SlopeSectionBuildDAO, which runs under the
+  `spatial-slope-build` Spring profile (see application-spatial-slope-build.properties). Not
+  exposed through any Controller/API. See docs/09-slope-section-analysis.md.
+
+  Rebuild strategy: wipe the whole slope_section table and regenerate it from
+  trail_segment/trail_feature, same "delete all, recompute, bulk insert" strategy used by
+  mapper-network-build.xml; SlopeSection is fully derived, never edited in place.
+-->
+<mapper namespace="mapper-slope-section-build">
+
+	<select id="findAllTrailIds" resultType="long">
+		SELECT id FROM trail ORDER BY id
+	</select>
+
+	<delete id="deleteAllSlopeSections">
+		DELETE FROM slope_section
+	</delete>
+
+	<!-- Single flat INSERT for every SlopeSection of every Trail in one call; geometry comes in
+	     as WKT text (see SlopeSectionInsertParam) and is parsed by ST_GeomFromText here, the same
+	     way the Network build and Slope compute-on-request path already build geometry from text
+	     rather than a Java GIS object. -->
+	<insert id="insertSlopeSections">
+		INSERT INTO slope_section (
+			trail_id, chain_sequence, section_sequence, window_m, distance_m,
+			estimated_elevation_start, estimated_elevation_end, estimated_elevation_delta,
+			estimated_slope_percent, data_quality_flag, geom
+		)
+		VALUES
+		<foreach collection="rows" item="r" separator=",">
+			(
+				#{r.trailId}, #{r.chainSequence}, #{r.sectionSequence}, #{r.windowM}, #{r.distanceM},
+				#{r.estimatedElevationStart}, #{r.estimatedElevationEnd}, #{r.estimatedElevationDelta},
+				#{r.estimatedSlopePercent}, #{r.dataQualityFlag},
+				ST_GeomFromText(#{r.wkt}::text, 4326)
+			)
+		</foreach>
+	</insert>
+
+	<select id="countAllSlopeSections" resultType="int">
+		SELECT COUNT(*) FROM slope_section
+	</select>
+
+</mapper>
